@@ -23,8 +23,8 @@ WORKDIR /workspace/TurboDiffusion
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Install deps
-RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir gradio==6.0.1 einops tqdm safetensors
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Optional: enable sagesla (SpargeAttn) ——不装也能跑 sla/original
 # RUN pip install --no-cache-dir "git+https://github.com/thu-ml/SpargeAttn.git" --no-build-isolation
