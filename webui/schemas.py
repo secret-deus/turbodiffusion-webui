@@ -24,7 +24,6 @@ PRESETS = {
         quant_linear=True,
         default_norm=False,
     ),
-
     "Wan2.1 T2V 14B 720p (quant, 5090 recommended)": EngineConfig(
         name="Wan2.1 T2V 14B 720p (quant, 5090 recommended)",
         dit_path="checkpoints/TurboWan2.1-T2V-14B-720P-quant.pth",
@@ -33,7 +32,7 @@ PRESETS = {
         model="Wan2.1-14B",
         resolution="720p",
         aspect_ratio="16:9",
-        quant_linear=True,
+        quant_linear=True,      # quant checkpoint 需要 --quant_linear（官方建议）
         default_norm=False,
     ),
 
@@ -45,7 +44,8 @@ PRESETS = {
         model="Wan2.1-14B",
         resolution="720p",
         aspect_ratio="16:9",
-        quant_linear=False,
+        quant_linear=False,     # 非 quant checkpoint 不要开 quant_linear
         default_norm=False,
     ),
+
 }

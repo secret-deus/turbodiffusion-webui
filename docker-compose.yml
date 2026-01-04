@@ -1,7 +1,7 @@
 services:
   webui:
     build: .
-    container_name: turbodiffusion-webui
+    container_name: turbodiffusion-webui-1
     deploy:
       resources:
         reservations:
@@ -18,4 +18,4 @@ services:
       - ./outputs:/workspace/TurboDiffusion/outputs
     working_dir: /workspace/TurboDiffusion
     ports:
-      - "7860:7860"
+      - "17860:7860"

@@ -1,149 +1,261 @@
 import math
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import Optional, Union, Callable
 
 import torch
 from einops import rearrange, repeat
 from tqdm import tqdm
 
+from imaginaire.utils.io import save_image_or_video
+from imaginaire.utils import log
+
 from rcm.datasets.utils import VIDEO_RES_SIZE_INFO
 from rcm.utils.umt5 import clear_umt5_memory, get_umt5_embedding
 from rcm.tokenizers.wan2pt1 import Wan2pt1VAEInterface
 
-# TurboDiffusion repo 内置
+# ✅ 关键：绝对导入，避免 webui/ 下找不到 modify_model
 from turbodiffusion.inference.modify_model import tensor_kwargs, create_model
 
-# ---------- imaginaire fallback ----------
-def _save_video_fallback(tensor_c_t_h_w: torch.Tensor, save_path: str, fps: int = 16):
-    import imageio
-    c, t, h, w = tensor_c_t_h_w.shape
-    video = (tensor_c_t_h_w.permute(1, 2, 3, 0).clamp(0, 1).cpu().numpy() * 255).astype("uint8")
-    imageio.mimwrite(save_path, list(video), fps=fps)
 
-try:
-    from imaginaire.utils.io import save_image_or_video as _save_image_or_video
-except Exception:
-    _save_image_or_video = None
+ProgressCB = Optional[Callable[[str, int, int], None]]
+LogCB = Optional[Callable[[str], None]]
 
-def save_image_or_video(t, path, fps=16):
-    if _save_image_or_video is not None:
-        return _save_image_or_video(t, path, fps=fps)
-    return _save_video_fallback(t, path, fps=fps)
-
-# ---------- spargeattn detection ----------
-def _has_spargeattn():
-    try:
-        import spargeattn  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-@dataclass(frozen=True)
-class Wan21Config:
-    name: str
-    dit_path: str
-    vae_path: str
-    text_encoder_path: str
-    model: str = "Wan2.1-1.3B"
-    resolution: str = "480p"
-    aspect_ratio: str = "16:9"
-    quant_linear: bool = True
-    default_norm: bool = False
 
 class TurboWanT2VEngine:
-    def __init__(self, cfg: Wan21Config):
-        self.cfg = cfg
-        self.device = tensor_kwargs["device"]
-        self.dtype = tensor_kwargs["dtype"]
+    """
+    Load-once engine for Wan2.1 T2V TurboDiffusion inference.
+    Rebuild from wan2.1_t2v_infer.py main loop:
+      - load VAE once
+      - load DiT once
+      - compute UMT5 embedding per prompt, then clear UMT5 memory (default)
+      - do rCM sampling (1~4 steps)
+      - decode VAE
+      - save mp4
+    """
 
-        # attention fallback
-        self.has_sparge = _has_spargeattn()
-        self.net = None
-        self.tokenizer = None
+    def __init__(
+        self,
+        dit_path: str,
+        vae_path: str = "checkpoints/Wan2.1_VAE.pth",
+        text_encoder_path: str = "checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
+        model: str = "Wan2.1-1.3B",
+        resolution: str = "480p",
+        aspect_ratio: str = "16:9",
+        sigma_max: float = 80.0,
+        attention_type: str = "sla",
+        sla_topk: float = 0.1,
+        quant_linear: bool = False,
+        default_norm: bool = False,
+        keep_dit_on_gpu: bool = True,
+        keep_text_encoder: bool = False,
+    ):
+        # config
+        self.dit_path = dit_path
+        self.vae_path = vae_path
+        self.text_encoder_path = text_encoder_path
 
-        # store arguments for create_model
-        self.args = SimpleNamespace(
-            dit_path=cfg.dit_path,
-            model=cfg.model,
-            num_steps=4,
-            sigma_max=80,
-            vae_path=cfg.vae_path,
-            text_encoder_path=cfg.text_encoder_path,
-            num_frames=81,
-            prompt="",
-            resolution=cfg.resolution,
-            aspect_ratio=cfg.aspect_ratio,
-            seed=0,
-            save_path="",
-            attention_type="sla",
-            sla_topk=0.10,
-            quant_linear=cfg.quant_linear,
-            default_norm=cfg.default_norm,
-        )
+        self.model = model
+        self.resolution = resolution
+        self.aspect_ratio = aspect_ratio
+        self.sigma_max = sigma_max
+        self.attention_type = attention_type
+        self.sla_topk = sla_topk
+        self.quant_linear = quant_linear
+        self.default_norm = default_norm
 
-        self._load_models()
+        self.keep_dit_on_gpu = keep_dit_on_gpu
+        self.keep_text_encoder = keep_text_encoder
 
-    def _log(self, cb, msg):
-        if cb:
-            cb(msg)
+        # 1) Load VAE tokenizer/interface once
+        log.info(f"[Engine] Loading VAE: {vae_path}")
+        self.tokenizer = Wan2pt1VAEInterface(vae_pth=vae_path)
+        log.success("[Engine] VAE loaded.")
 
-    def _load_models(self):
-        # Load DiT
-        self.net = create_model(dit_path=self.cfg.dit_path, args=self.args).cpu().eval()
+        # 2) Build args-like object for create_model
+        self.args = self._make_args_namespace()
+
+        # 3) Load DiT once (CPU first)
+        log.info(f"[Engine] Loading DiT: {dit_path}")
+        self.net = create_model(dit_path=dit_path, args=self.args).cpu().eval()
         torch.cuda.empty_cache()
+        log.success("[Engine] DiT loaded.")
 
-        # VAE tokenizer
-        self.tokenizer = Wan2pt1VAEInterface(vae_pth=self.cfg.vae_path)
+        self._warmed_up = False
 
-    def close(self):
-        if self.net is not None:
+    # -----------------------------
+    # args shim for create_model
+    # -----------------------------
+    def _make_args_namespace(self):
+        """
+        create_model expects an argparse-like args with certain fields.
+        We'll create a lightweight object with these attributes.
+        """
+        class Args:
+            pass
+
+        args = Args()
+        args.dit_path = self.dit_path
+        args.model = self.model
+        args.num_samples = 1
+        args.num_steps = 4
+        args.sigma_max = self.sigma_max
+        args.vae_path = self.vae_path
+        args.text_encoder_path = self.text_encoder_path
+        args.num_frames = 81
+        args.prompt = ""
+        args.resolution = self.resolution
+        args.aspect_ratio = self.aspect_ratio
+        args.seed = 0
+        args.save_path = ""
+        args.attention_type = self.attention_type
+        args.sla_topk = self.sla_topk
+        args.quant_linear = self.quant_linear
+        args.default_norm = self.default_norm
+        return args
+
+    def _update_args(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self.args, k, v)
+
+    # -----------------------------
+    # lifecycle helpers
+    # -----------------------------
+    def warmup(self):
+        """
+        Warmup once to reduce first inference latency.
+        """
+        if self._warmed_up:
+            return
+        try:
+            log.info("[Engine] Warmup start...")
+            _ = self.generate(
+                prompt="warmup",
+                num_steps=1,
+                num_frames=17,
+                seed=0,
+                num_samples=1,
+                save_path=None,
+                return_tensor=False,
+                progress_cb=None,
+                log_cb=None,
+                use_tqdm=False,
+            )
+            self._warmed_up = True
+            log.success("[Engine] Warmup done.")
+        except Exception as e:
+            log.warning(f"[Engine] Warmup failed (ignored): {e}")
+
+    def unload_dit(self):
+        """
+        Optional: explicitly move DiT to CPU and clear cache.
+        """
+        try:
             self.net.cpu()
-        self.net = None
-        self.tokenizer = None
+        except Exception:
+            pass
         torch.cuda.empty_cache()
 
-    @torch.no_grad()
+    # -----------------------------
+    # main generate
+    # -----------------------------
+    @torch.inference_mode()
     def generate(
         self,
         prompt: str,
         num_steps: int = 4,
         num_frames: int = 81,
-        num_samples: int = 1,
         seed: int = 0,
-        attention_type: str = "sla",
-        sla_topk: float = 0.10,
-        sigma_max: float = 80,
-        default_norm: bool = False,
-        save_path: str = "outputs/out.mp4",
+        num_samples: int = 1,
+        resolution: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+        sigma_max: Optional[float] = None,
+        attention_type: Optional[str] = None,
+        sla_topk: Optional[float] = None,
+        quant_linear: Optional[bool] = None,
+        default_norm: Optional[bool] = None,
+        save_path: Optional[Union[str, Path]] = None,
         fps: int = 16,
-        progress_cb: Optional[Callable[[str, int, int], None]] = None,
-        log_cb: Optional[Callable[[str], None]] = None,
+        return_tensor: bool = False,
+        progress_cb: ProgressCB = None,
+        log_cb: LogCB = None,
         use_tqdm: bool = False,
-    ) -> str:
-        # sagesla requires spargeattn
-        if attention_type == "sagesla" and not self.has_sparge:
-            self._log(log_cb, "[Engine] SpargeAttn not installed, fallback sagesla -> sla")
-            attention_type = "sla"
+    ):
+        """
+        Run inference and optionally save mp4.
 
-        # update args
-        self.args.prompt = prompt
-        self.args.num_steps = int(num_steps)
-        self.args.num_frames = int(num_frames)
-        self.args.attention_type = attention_type
-        self.args.sla_topk = float(sla_topk)
-        self.args.sigma_max = float(sigma_max)
-        self.args.default_norm = bool(default_norm)
+        Returns:
+          - if save_path is provided: str(save_path)
+          - else: video numpy/tensor (C,T,H,W) in [0,1]
+        """
 
-        # get text embedding
-        self._log(log_cb, f"[Engine] Encode prompt: {prompt[:80]}...")
-        text_emb = get_umt5_embedding(checkpoint_path=self.cfg.text_encoder_path, prompts=prompt).to(**tensor_kwargs)
-        clear_umt5_memory()
+        # ---------- resolve defaults ----------
+        if resolution is None:
+            resolution = self.resolution
+        if aspect_ratio is None:
+            aspect_ratio = self.aspect_ratio
+        if sigma_max is None:
+            sigma_max = self.sigma_max
+        if attention_type is None:
+            attention_type = self.attention_type
+        if sla_topk is None:
+            sla_topk = self.sla_topk
+        if quant_linear is None:
+            quant_linear = self.quant_linear
+        if default_norm is None:
+            default_norm = self.default_norm
 
-        condition = {"crossattn_emb": repeat(text_emb.to(**tensor_kwargs), "b l d -> (k b) l d", k=num_samples)}
-        w, h = VIDEO_RES_SIZE_INFO[self.cfg.resolution][self.cfg.aspect_ratio]
+        # update args mirror (for create_model compat / net behavior)
+        self._update_args(
+            prompt=prompt,
+            num_steps=num_steps,
+            num_frames=num_frames,
+            seed=seed,
+            num_samples=num_samples,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+            sigma_max=sigma_max,
+            attention_type=attention_type,
+            sla_topk=sla_topk,
+            quant_linear=quant_linear,
+            default_norm=default_norm,
+        )
+
+        # ---------- stage: embedding ----------
+        if log_cb:
+            log_cb(f"[Engine] Embedding prompt: {prompt}")
+        if progress_cb:
+            progress_cb("embedding", 0, 1)
+
+        # IMPORTANT: your original script uses:
+        # text_emb = get_umt5_embedding(...).to(**tensor_kwargs)
+        text_emb = get_umt5_embedding(
+            checkpoint_path=self.text_encoder_path,
+            prompts=prompt
+        ).to(**tensor_kwargs)
+
+        # match script: clear UMT5 memory immediately
+        if not self.keep_text_encoder:
+            clear_umt5_memory()
+
+        if progress_cb:
+            progress_cb("embedding", 1, 1)
+
+        # ---------- stage: setup ----------
+        if log_cb:
+            log_cb("[Engine] Preparing condition + noise...")
+        if progress_cb:
+            progress_cb("setup", 0, 1)
+
+        condition = {
+            "crossattn_emb": repeat(
+                text_emb.to(**tensor_kwargs),
+                "b l d -> (k b) l d",
+                k=num_samples
+            )
+        }
+
+        w, h = VIDEO_RES_SIZE_INFO[resolution][aspect_ratio]
 
         state_shape = [
             self.tokenizer.latent_ch,
@@ -152,63 +264,115 @@ class TurboWanT2VEngine:
             w // self.tokenizer.spatial_compression_factor,
         ]
 
-        generator = torch.Generator(device=self.device)
+        generator = torch.Generator(device=tensor_kwargs["device"])
         generator.manual_seed(seed)
 
         init_noise = torch.randn(
             num_samples,
             *state_shape,
             dtype=torch.float32,
-            device=self.device,
+            device=tensor_kwargs["device"],
             generator=generator,
         )
 
-        # mid_t schedule
-        mid_t = [1.5, 1.4, 1.0][: num_steps - 1]
-        t_steps = torch.tensor([math.atan(sigma_max), *mid_t, 0], dtype=torch.float64, device=init_noise.device)
+        # timesteps (same as script)
+        # mid_t = [1.5, 1.4, 1.0][: num_steps - 1]
+        mid_t = [1.5, 1.4, 1.0][: max(num_steps - 1, 0)]
+
+        t_steps = torch.tensor(
+            [math.atan(sigma_max), *mid_t, 0],
+            dtype=torch.float64,
+            device=init_noise.device,
+        )
+        # convert TrigFlow timesteps to RectifiedFlow
         t_steps = torch.sin(t_steps) / (torch.cos(t_steps) + torch.sin(t_steps))
+
+        if progress_cb:
+            progress_cb("setup", 1, 1)
+
+        # ---------- stage: sampling ----------
+        total_steps = t_steps.shape[0] - 1
+        if log_cb:
+            log_cb(f"[Engine] Sampling: steps={num_steps} (total loops={total_steps})")
+        if progress_cb:
+            progress_cb("sampling", 0, total_steps)
 
         x = init_noise.to(torch.float64) * t_steps[0]
         ones = torch.ones(x.size(0), 1, device=x.device, dtype=x.dtype)
-        total_steps = t_steps.shape[0] - 1
 
+        # move net to GPU
         self.net.cuda()
 
-        step_iter = zip(t_steps[:-1], t_steps[1:])
+        it = list(zip(t_steps[:-1], t_steps[1:]))
         if use_tqdm:
-            step_iter = tqdm(list(step_iter), desc="Sampling", total=total_steps)
+            it = tqdm(it, desc="Sampling", total=total_steps)
 
-        for i, (t_cur, t_next) in enumerate(step_iter, start=1):
-            if progress_cb:
-                progress_cb("sampling", i, total_steps)
-
+        for i, (t_cur, t_next) in enumerate(it):
             v_pred = self.net(
                 x_B_C_T_H_W=x.to(**tensor_kwargs),
                 timesteps_B_T=(t_cur.float() * ones * 1000).to(**tensor_kwargs),
-                **condition,
+                **condition
             ).to(torch.float64)
 
             x = (1 - t_next) * (x - t_cur * v_pred) + t_next * torch.randn(
                 *x.shape,
                 dtype=torch.float32,
-                device=self.device,
+                device=tensor_kwargs["device"],
                 generator=generator,
             )
 
+            if progress_cb:
+                progress_cb("sampling", i + 1, total_steps)
+
         samples = x.float()
-        self.net.cpu()
-        torch.cuda.empty_cache()
+
+        # keep net on GPU or free
+        if not self.keep_dit_on_gpu:
+            self.net.cpu()
+            torch.cuda.empty_cache()
+
+        # ---------- stage: decode ----------
+        if log_cb:
+            log_cb("[Engine] Decoding VAE...")
+        if progress_cb:
+            progress_cb("decode", 0, 1)
+
+        video = self.tokenizer.decode(samples)  # (B,C,T,H,W) usually
 
         if progress_cb:
             progress_cb("decode", 1, 1)
 
-        video = self.tokenizer.decode(samples)
+        # ---------- stage: normalize + format ----------
+        # original script:
+        # to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0
+        # save_image_or_video(rearrange(to_show, "n b c t h w -> c t (n h) (b w)"), ...)
+        #
+        # Here: we have single batch 'video' (B,C,T,H,W)
+        to_show = (1.0 + video.clamp(-1, 1)) / 2.0  # [0,1]
+        to_show = to_show.float().cpu()
 
-        to_show = (1.0 + video.clamp(-1, 1)) / 2.0
-        out_tensor = rearrange(to_show, "b c t h w -> c t h w")
+        # tile multiple samples horizontally like original script:
+        # output shape for save_image_or_video: (C,T,H,W)
+        # We'll tile B samples across width: (C,T,H,B*W)
+        to_show = rearrange(to_show, "b c t h w -> c t h (b w)")
 
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        save_image_or_video(out_tensor, save_path, fps=fps)
-        self._log(log_cb, f"[Engine] Saved to: {save_path}")
+        # ---------- stage: save ----------
+        if save_path is not None:
+            if log_cb:
+                log_cb(f"[Engine] Saving video: {save_path}")
+            if progress_cb:
+                progress_cb("save", 0, 1)
 
-        return save_path
+            save_path = str(save_path)
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            save_image_or_video(to_show, save_path, fps=fps)
+
+            if progress_cb:
+                progress_cb("save", 1, 1)
+
+            return save_path
+
+        # return raw video
+        if return_tensor:
+            return to_show
+        return to_show.numpy()
