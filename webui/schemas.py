@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import Dict, List
+
+from webui.utils import check_paths
 
 @dataclass(frozen=True)
 class EngineConfig:
@@ -49,3 +52,22 @@ PRESETS = {
     ),
 
 }
+
+
+def get_preset(name: str) -> EngineConfig:
+    """Return preset config by name."""
+    return PRESETS[name]
+
+
+def available_preset_names() -> List[str]:
+    """Return preset names whose checkpoint files all exist."""
+    available = []
+    for name, cfg in PRESETS.items():
+        if not check_paths(cfg):
+            available.append(name)
+    return available
+
+
+def available_presets() -> Dict[str, EngineConfig]:
+    """Return presets that have all required checkpoint files present."""
+    return {name: PRESETS[name] for name in available_preset_names()}
