@@ -3,7 +3,7 @@ import traceback
 from pathlib import Path
 import gradio as gr
 
-from webui.schemas import PRESETS, available_preset_names, get_preset
+from webui.schemas import PRESETS, available_preset_names, get_preset, preset_details
 from webui.manager import EngineManager
 from webui.utils import gpu_info, has_spargeattn, check_paths
 
@@ -23,6 +23,7 @@ def _status_badge(loaded: bool, msg: str = ""):
 
 def load_model(preset_name):
     cfg = get_preset(preset_name)
+    details = preset_details(preset_name)
     try:
         MANAGER.load(cfg)
     except Exception as exc:  # surface checkpoint errors
@@ -33,7 +34,7 @@ def load_model(preset_name):
         )
     info = gpu_info()
     return (
-        _status_badge(True, f"Preset: `{preset_name}`\nGPU: {info.get('name','-')}"),
+        _status_badge(True, f"Preset: `{preset_name}`\n{details}\nGPU: {info.get('name','-')}"),
         gr.update(interactive=False),  # disable load while loaded
         gr.update(interactive=True),   # enable unload
     )
@@ -132,7 +133,7 @@ def generate_video(
             err = f"❌ invalid output path: {out_path}"
             logs.append(err)
             status = err
-            return None, status, "\n".join(logs[-200:]), {}
+            return "", status, "\n".join(logs[-200:]), {}
 
         t1 = time.time()
 
@@ -166,7 +167,7 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        return None, status, log_text, {}
+        return "", status, log_text, {}
 
 
 def create_demo():
@@ -189,6 +190,7 @@ def create_demo():
                             value=DEFAULT_PRESET,
                             label="Model Preset"
                         )
+                        preset_info = gr.Markdown(preset_details(DEFAULT_PRESET))
                         prompt = gr.Textbox(lines=3, label="Prompt", value="a cinematic shot of a tiger walking in snow")
 
                         with gr.Accordion("Basic", open=True):
@@ -276,6 +278,10 @@ def create_demo():
                     concurrency_limit=1,
                 )
 
+                preset.change(
+                    lambda name: preset_details(name), inputs=[preset], outputs=[preset_info]
+                )
+
                 run_evt.then(
                     fn=_after_gen,
                     inputs=[out_video, status_md, log_box, last_meta_state, history_state],
@@ -287,6 +293,7 @@ def create_demo():
                 with gr.Row():
                     with gr.Column(scale=3):
                         preset_m = gr.Dropdown(choices=PRESET_CHOICES, value=DEFAULT_PRESET, label="Preset")
+                        preset_info_m = gr.Markdown(preset_details(DEFAULT_PRESET))
                         validate_btn = gr.Button("Validate Checkpoints")
                         validate_out = gr.Textbox(label="Checkpoint Status", lines=8, interactive=False)
 
@@ -301,6 +308,7 @@ def create_demo():
                         refresh_btn = gr.Button("Refresh System Info")
 
                 validate_btn.click(validate_paths, inputs=[preset_m], outputs=[validate_out])
+                preset_m.change(lambda name: preset_details(name), inputs=[preset_m], outputs=[preset_info_m])
                 refresh_btn.click(refresh_system, outputs=[gpu_json, sa_text])
 
                 load_btn.click(load_model, inputs=[preset_m], outputs=[status_badge, load_btn, unload_btn], concurrency_id="gpu", concurrency_limit=1)
