@@ -84,12 +84,12 @@ TurboDiffusion/
 docker compose up --build
 ```
 
-Compose mounts `./checkpoints -> /workspace/TurboDiffusion/checkpoints` and honors a comma-separated `MODEL_PATHS` env var, so you can point to multiple search roots (e.g., `/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion`).
+Compose mounts `./checkpoints -> /workspace/TurboDiffusion/checkpoints_host` and honors a comma-separated `MODEL_PATHS` env var, so you can point to multiple search roots (e.g., `/workspace/TurboDiffusion/checkpoints_host,/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion`).
 
 Open:
 
 ```
-http://<server-ip>:7860
+http://<server-ip>:17860
 ```
 
 ---
@@ -102,9 +102,7 @@ The Dockerfile will automatically download:
 ✅ **models_t5_umt5-xxl-enc-bf16.pth**
 ✅ Turbo DiT distilled checkpoints:
 
-* `TurboWan2.1-T2V-1.3B-480P-quant.pth`
 * `TurboWan2.1-T2V-14B-720P-quant.pth`
-* `TurboWan2.1-T2V-14B-720P.pth`
 
 All are placed under:
 
@@ -112,7 +110,7 @@ All are placed under:
 /workspace/TurboDiffusion/checkpoints/
 ```
 
-Set `MODEL_PATHS` (comma-separated) if you mount checkpoints elsewhere (e.g., `/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion/checkpoints`).
+Set `MODEL_PATHS` (comma-separated) if you mount checkpoints elsewhere (e.g., `/workspace/TurboDiffusion/checkpoints_host,/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion/checkpoints`).
 
 ---
 

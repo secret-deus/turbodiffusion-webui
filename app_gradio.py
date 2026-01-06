@@ -4,18 +4,19 @@ import traceback
 from pathlib import Path
 import gradio as gr
 
-from webui.schemas import PRESETS, available_preset_names, get_preset, preset_details
 from webui.schemas import (
     PRESETS,
     DEFAULT_MODEL_ROOT,
     discoverable_preset_names,
     get_preset,
+    preset_details,
+    refresh_discovered_presets,
 )
 from webui.manager import EngineManager
 from webui.utils import gpu_info, has_spargeattn, check_paths
 
-ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "outputs"
+_output_dir = os.environ.get("OUTPUT_DIR")
+OUT = Path(_output_dir) if _output_dir else (Path.cwd() / "outputs")
 OUT.mkdir(parents=True, exist_ok=True)
 
 MANAGER = EngineManager()
@@ -71,6 +72,8 @@ def validate_paths(preset_name):
 
 
 def refresh_presets(current_generate_choice, current_models_choice):
+    # Rescan checkpoints so newly mounted/copied weights show up without restart.
+    refresh_discovered_presets()
     names = discoverable_preset_names()
     selected_generate = current_generate_choice if current_generate_choice in names else names[0]
     selected_models = current_models_choice if current_models_choice in names else names[0]
@@ -110,6 +113,8 @@ def generate_video(
             MANAGER.load(cfg)
 
         eng = MANAGER.engine
+        eng.keep_dit_on_gpu = bool(keep_dit_on_gpu)
+        eng.keep_text_encoder = bool(keep_text_encoder)
 
         # seed handling
         if seed_mode == "random":

@@ -65,6 +65,7 @@ def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
         aspect_ratio=cfg.aspect_ratio,
         quant_linear=cfg.quant_linear,
         default_norm=cfg.default_norm,
+        info=cfg.info,
     )
 
 @dataclass(frozen=True)
@@ -119,30 +120,67 @@ PRESETS = {
 }
 
 
+def _discovery_dirs() -> List[Path]:
+    """Directories to scan for additional checkpoints.
+
+    Always includes the local ``./checkpoints`` folder (relative to CWD) for
+    backwards compatibility, then adds any ``MODEL_PATHS`` roots.
+    """
+
+    candidates: List[Path] = [Path("checkpoints"), *_model_search_roots()]
+
+    # Some users may point MODEL_PATHS at a repo root; scan ``root/checkpoints`` too.
+    for root in list(candidates):
+        if root.name != "checkpoints":
+            candidates.append(root / "checkpoints")
+
+    seen: set[str] = set()
+    dirs: List[Path] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            resolved = candidate
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.append(resolved)
+    return dirs
+
+
 def _build_discovered_presets() -> Dict[str, EngineConfig]:
     """Create EngineConfig entries from locally discovered checkpoints."""
 
     discovered: Dict[str, EngineConfig] = {}
-    checkpoints_dir = Path("checkpoints")
-    vae_default = checkpoints_dir / "Wan2.1_VAE.pth"
-    text_encoder_default = checkpoints_dir / "models_t5_umt5-xxl-enc-bf16.pth"
+    default_dir = Path("checkpoints")
+    vae_default = default_dir / "Wan2.1_VAE.pth"
+    text_encoder_default = default_dir / "models_t5_umt5-xxl-enc-bf16.pth"
 
-    for stem, path in discover_checkpoints(checkpoints_dir).items():
-        fields, info = infer_from_checkpoint(path)
+    for checkpoints_dir in _discovery_dirs():
+        for stem, path in discover_checkpoints(checkpoints_dir).items():
+            fields, info = infer_from_checkpoint(path)
 
-        cfg = EngineConfig(
-            name=str(fields.get("name") or f"Auto: {stem}"),
-            dit_path=str(path),
-            vae_path=str(fields.get("vae_path") or vae_default),
-            text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
-            model=str(fields.get("model") or EngineConfig.model),
-            resolution=str(fields.get("resolution") or EngineConfig.resolution),
-            aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
-            quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
-            default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
-            info=info,
-        )
-        discovered[cfg.name] = cfg
+            name_base = str(fields.get("name") or f"Auto: {stem}")
+            name = name_base
+            idx = 1
+            while name in discovered:
+                idx += 1
+                name = f"{name_base} ({idx})"
+
+            cfg = EngineConfig(
+                name=name,
+                dit_path=str(path),
+                vae_path=str(fields.get("vae_path") or vae_default),
+                text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
+                model=str(fields.get("model") or EngineConfig.model),
+                resolution=str(fields.get("resolution") or EngineConfig.resolution),
+                aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
+                quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
+                default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
+                info=info,
+            )
+            discovered[cfg.name] = cfg
     return discovered
 
 
@@ -179,3 +217,43 @@ def discoverable_preset_names() -> List[str]:
     if discovered:
         return discovered
     return list(PRESETS.keys())
+
+
+def refresh_discovered_presets() -> None:
+    """Rescan local checkpoints and merge into :data:`PRESETS`."""
+
+    PRESETS.update(_build_discovered_presets())
+
+
+def preset_details(name: str) -> str:
+    """Human-friendly markdown details for a preset.
+
+    Used by the Gradio UI to show resolved paths + inferred metadata.
+    """
+
+    cfg = get_preset(name)
+    missing = check_paths(cfg)
+
+    status = "✅" if not missing else "❌"
+    lines = [f"### {status} {cfg.name}"]
+
+    if cfg.info:
+        lines.append(f"- info: {cfg.info}")
+
+    lines.extend(
+        [
+            f"- model: `{cfg.model}`",
+            f"- resolution: `{cfg.resolution}` | aspect: `{cfg.aspect_ratio}`",
+            f"- quant_linear: `{cfg.quant_linear}` | default_norm: `{cfg.default_norm}`",
+            f"- DiT: `{cfg.dit_path}`",
+            f"- VAE: `{cfg.vae_path}`",
+            f"- Text encoder: `{cfg.text_encoder_path}`",
+        ]
+    )
+
+    if missing:
+        lines.append("")
+        lines.append("**Missing files:**")
+        lines.extend([f"- `{path}`" for path in missing])
+
+    return "\n".join(lines)

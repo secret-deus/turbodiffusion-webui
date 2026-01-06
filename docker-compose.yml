@@ -14,10 +14,12 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - CUDA_HOME=/usr/local/cuda
       - TORCH_CUDA_ARCH_LIST=12.0
-      - MODEL_PATHS=/workspace/TurboDiffusion/checkpoints
+      # Prefer host-mounted checkpoints, but keep the image-baked defaults as fallback.
+      - MODEL_PATHS=/workspace/TurboDiffusion/checkpoints_host,/workspace/TurboDiffusion/checkpoints
     volumes:
       - ./outputs:/workspace/TurboDiffusion/outputs
-      - ./checkpoints:/workspace/TurboDiffusion/checkpoints
+      # NOTE: Don't mount over /workspace/TurboDiffusion/checkpoints, otherwise you hide the checkpoints baked into the image.
+      - ./checkpoints:/workspace/TurboDiffusion/checkpoints_host
     working_dir: /workspace/TurboDiffusion
     ports:
       - "17860:7860"
