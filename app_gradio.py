@@ -3,7 +3,7 @@ import traceback
 from pathlib import Path
 import gradio as gr
 
-from webui.schemas import PRESETS, available_preset_names, get_preset
+from webui.schemas import available_preset_names, get_preset, load_presets
 from webui.manager import EngineManager
 from webui.utils import gpu_info, has_spargeattn, check_paths
 
@@ -12,7 +12,7 @@ OUT = ROOT / "outputs"
 OUT.mkdir(parents=True, exist_ok=True)
 
 MANAGER = EngineManager()
-PRESET_CHOICES = available_preset_names() or list(PRESETS.keys())
+PRESET_CHOICES = available_preset_names() or list(load_presets().keys())
 DEFAULT_PRESET = PRESET_CHOICES[0]
 
 
