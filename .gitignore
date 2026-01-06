@@ -1,0 +1,68 @@
+# --------
+# Python
+# --------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+.env
+.env.*
+*.env
+.python-version
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Type check / lint / test caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# -------------
+# Project data
+# -------------
+# Generated outputs (videos/images/logs)
+outputs/
+*.log
+logs/
+
+# Large model weights / checkpoints (keep them out of git)
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+
+# HuggingFace / Transformers caches (if created in repo)
+hf_cache/
+.cache/
+
+# --------------
+# OS / editors
+# --------------
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+*.code-workspace
