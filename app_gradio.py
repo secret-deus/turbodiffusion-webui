@@ -127,6 +127,13 @@ def generate_video(
             progress_cb=progress_cb,
             log_cb=log_cb,
         )
+        out_path = Path(out_path)
+        if out_path.is_dir() or not out_path.exists():
+            err = f"❌ invalid output path: {out_path}"
+            logs.append(err)
+            status = err
+            return None, status, "\n".join(logs[-200:]), {}
+
         t1 = time.time()
 
         # history row
@@ -249,7 +256,6 @@ def create_demo():
                         ] for x in history]
                     return (
                         stage, progress_pct,
-                        video_path,
                         status, logs,
                         history, rows
                     )
@@ -273,7 +279,7 @@ def create_demo():
                 run_evt.then(
                     fn=_after_gen,
                     inputs=[out_video, status_md, log_box, last_meta_state, history_state],
-                    outputs=[stage_md, prog, out_video, status_md, log_box, history_state, history_df],
+                    outputs=[stage_md, prog, status_md, log_box, history_state, history_df],
                 )
 
             # ===================== Models Tab =====================
