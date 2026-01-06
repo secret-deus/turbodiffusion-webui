@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
+from webui.discovery import discover_checkpoints, infer_from_checkpoint
+
 from webui.utils import check_paths
 from webui import preset_loader
 
@@ -76,6 +78,7 @@ class EngineConfig:
     aspect_ratio: str = "16:9"
     quant_linear: bool = True
     default_norm: bool = False
+    info: str = ""
 
 PRESETS = {
     "Wan2.1 T2V 1.3B 480p (quant)": EngineConfig(
@@ -116,6 +119,34 @@ PRESETS = {
 }
 
 
+def _build_discovered_presets() -> Dict[str, EngineConfig]:
+    """Create EngineConfig entries from locally discovered checkpoints."""
+
+    discovered: Dict[str, EngineConfig] = {}
+    checkpoints_dir = Path("checkpoints")
+    vae_default = checkpoints_dir / "Wan2.1_VAE.pth"
+    text_encoder_default = checkpoints_dir / "models_t5_umt5-xxl-enc-bf16.pth"
+
+    for stem, path in discover_checkpoints(checkpoints_dir).items():
+        fields, info = infer_from_checkpoint(path)
+
+        cfg = EngineConfig(
+            name=str(fields.get("name") or f"Auto: {stem}"),
+            dit_path=str(path),
+            vae_path=str(fields.get("vae_path") or vae_default),
+            text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
+            model=str(fields.get("model") or EngineConfig.model),
+            resolution=str(fields.get("resolution") or EngineConfig.resolution),
+            aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
+            quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
+            default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
+            info=info,
+        )
+        discovered[cfg.name] = cfg
+    return discovered
+
+
+PRESETS.update(_build_discovered_presets())
 def load_presets() -> Dict[str, EngineConfig]:
     """Return merged presets including discovered checkpoints."""
     return preset_loader.discover_presets(PRESETS, EngineConfig)
