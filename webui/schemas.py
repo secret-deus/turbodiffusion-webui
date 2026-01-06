@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from webui.utils import check_paths
+from webui import preset_loader
 
 
 DEFAULT_MODEL_ROOT = "/workspace/TurboDiffusion/checkpoints"
@@ -113,6 +114,11 @@ PRESETS = {
     ),
 
 }
+
+
+def load_presets() -> Dict[str, EngineConfig]:
+    """Return merged presets including discovered checkpoints."""
+    return preset_loader.discover_presets(PRESETS, EngineConfig)
 
 
 def get_preset(name: str) -> EngineConfig:
