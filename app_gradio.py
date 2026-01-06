@@ -78,44 +78,40 @@ def generate_video(
     keep_text_encoder,
     default_norm,
 ):
-    # ---------- pre-check ----------
+    logs = []
     try:
+        # ---------- pre-check ----------
         if not MANAGER.is_loaded() or MANAGER.cfg.name != preset_name:
             # auto load if not loaded or preset mismatch
             cfg = get_preset(preset_name)
             MANAGER.load(cfg)
 
         eng = MANAGER.engine
-    except Exception as exc:
-        err_log = f"❌ Model load failed: {exc}"
-        return "", err_log, err_log, {}
 
-    # seed handling
-    if seed_mode == "random":
-        seed = int(time.time()) % 10_000_000
-    else:
-        seed = int(seed)
+        # seed handling
+        if seed_mode == "random":
+            seed = int(time.time()) % 10_000_000
+        else:
+            seed = int(seed)
 
-    # progress/log buffers
-    logs = []
-    stage_text = {"text": "starting"}
-    progress = {"cur": 0, "total": 1}
+        # progress/log buffers
+        stage_text = {"text": "starting"}
+        progress = {"cur": 0, "total": 1}
 
-    def log_cb(msg):
-        logs.append(msg)
+        def log_cb(msg):
+            logs.append(msg)
 
-    def progress_cb(stage, cur, total):
-        stage_text["text"] = stage
-        progress["cur"] = cur
-        progress["total"] = total
+        def progress_cb(stage, cur, total):
+            stage_text["text"] = stage
+            progress["cur"] = cur
+            progress["total"] = total
 
-    # file naming
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    save_path = OUT / f"t2v_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
+        # file naming
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        save_path = OUT / f"t2v_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
 
-    # run inference
-    t0 = time.time()
-    try:
+        # run inference
+        t0 = time.time()
         out_path = eng.generate(
             prompt=prompt,
             num_steps=int(num_steps),
@@ -156,6 +152,9 @@ def generate_video(
         return str(out_path), status, log_text, meta
     except Exception as exc:  # capture inference failure
         tb = traceback.format_exc()
+        if not logs:
+            # ensure the textbox is populated even if the engine raises instantly
+            logs.append("❌ No logs were produced before the failure.")
         logs.append(f"❌ Inference failed: {exc}")
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
