@@ -84,6 +84,8 @@ TurboDiffusion/
 docker compose up --build
 ```
 
+Compose mounts `./checkpoints -> /workspace/TurboDiffusion/checkpoints` and honors a comma-separated `MODEL_PATHS` env var, so you can point to multiple search roots (e.g., `/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion`).
+
 Open:
 
 ```
@@ -110,6 +112,8 @@ All are placed under:
 /workspace/TurboDiffusion/checkpoints/
 ```
 
+Set `MODEL_PATHS` (comma-separated) if you mount checkpoints elsewhere (e.g., `/workspace/TurboDiffusion/checkpoints,/mnt/nas/turbodiffusion/checkpoints`).
+
 ---
 
 ## ⚙️ WebUI Usage
@@ -127,6 +131,7 @@ All are placed under:
 * Validate checkpoints
 * Load model
 * Unload model
+* Discover mounted checkpoints (updates dropdowns without restarting)
 * GPU info & SpargeAttn check
 
 ---
