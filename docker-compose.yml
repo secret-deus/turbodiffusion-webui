@@ -14,8 +14,10 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - CUDA_HOME=/usr/local/cuda
       - TORCH_CUDA_ARCH_LIST=12.0
+      - MODEL_PATHS=/workspace/TurboDiffusion/checkpoints
     volumes:
       - ./outputs:/workspace/TurboDiffusion/outputs
+      - ./checkpoints:/workspace/TurboDiffusion/checkpoints
     working_dir: /workspace/TurboDiffusion
     ports:
       - "17860:7860"

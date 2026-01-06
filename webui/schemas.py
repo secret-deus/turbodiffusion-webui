@@ -1,8 +1,69 @@
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
 
 from webui.utils import check_paths
 from webui import preset_loader
+
+
+DEFAULT_MODEL_ROOT = "/workspace/TurboDiffusion/checkpoints"
+
+
+def _model_search_roots() -> List[Path]:
+    env_value = os.environ.get("MODEL_PATHS", "")
+    if env_value.strip():
+        raw_roots = [p.strip() for p in env_value.split(",") if p.strip()]
+    else:
+        raw_roots = [DEFAULT_MODEL_ROOT]
+
+    roots: List[Path] = []
+    for root in raw_roots:
+        path = Path(root).expanduser()
+        if path not in roots:
+            roots.append(path)
+    return roots
+
+
+def _normalize_relative(path: Path) -> Path:
+    if path.parts and path.parts[0] == "checkpoints":
+        return Path(*path.parts[1:])
+    return path
+
+
+def _resolve_checkpoint_path(path_str: str, roots: List[Path]) -> str:
+    path = Path(path_str)
+    candidates = []
+
+    if path.is_absolute():
+        candidates.append(path)
+    else:
+        candidates.append(Path.cwd() / path)
+        normalized = _normalize_relative(path)
+        for root in roots:
+            candidates.append(root / normalized)
+            candidates.append(root / path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return str(candidates[0])
+
+
+def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
+    roots = _model_search_roots()
+    return EngineConfig(
+        name=cfg.name,
+        dit_path=_resolve_checkpoint_path(cfg.dit_path, roots),
+        vae_path=_resolve_checkpoint_path(cfg.vae_path, roots),
+        text_encoder_path=_resolve_checkpoint_path(cfg.text_encoder_path, roots),
+        model=cfg.model,
+        resolution=cfg.resolution,
+        aspect_ratio=cfg.aspect_ratio,
+        quant_linear=cfg.quant_linear,
+        default_norm=cfg.default_norm,
+    )
 
 @dataclass(frozen=True)
 class EngineConfig:
@@ -61,20 +122,29 @@ def load_presets() -> Dict[str, EngineConfig]:
 
 
 def get_preset(name: str) -> EngineConfig:
-    """Return preset config by name."""
-    return load_presets()[name]
+    """Return preset config by name, resolved against MODEL_PATHS search roots."""
+    cfg = PRESETS[name]
+    return _resolve_preset_paths(cfg)
 
 
 def available_preset_names() -> List[str]:
-    """Return preset names whose checkpoint files all exist."""
+    """Return preset names whose checkpoint files all exist within search roots."""
     available = []
-    for name, cfg in load_presets().items():
-        if not check_paths(cfg):
+    for name, cfg in PRESETS.items():
+        resolved = _resolve_preset_paths(cfg)
+        if not check_paths(resolved):
             available.append(name)
     return available
 
 
 def available_presets() -> Dict[str, EngineConfig]:
     """Return presets that have all required checkpoint files present."""
-    presets = load_presets()
-    return {name: cfg for name, cfg in presets.items() if not check_paths(cfg)}
+    return {name: get_preset(name) for name in available_preset_names()}
+
+
+def discoverable_preset_names() -> List[str]:
+    """Return preset names; prefer discovered ones, otherwise fallback to all."""
+    discovered = available_preset_names()
+    if discovered:
+        return discovered
+    return list(PRESETS.keys())
