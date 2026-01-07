@@ -211,12 +211,44 @@ def available_presets() -> Dict[str, EngineConfig]:
     return {name: get_preset(name) for name in available_preset_names()}
 
 
+def _is_auto_preset_name(name: str) -> bool:
+    stripped = name.lstrip()
+    return stripped.startswith("Auto:") or stripped.startswith("Auto |")
+
+
+def _hide_duplicate_auto_presets(names: List[str]) -> List[str]:
+    """Hide auto-discovered presets when an equivalent named preset exists.
+
+    We treat presets as "equivalent" if they point to the same DiT checkpoint
+    filename (regardless of directory). This keeps the UI list clean while
+    still allowing Auto entries for checkpoints that don't have a curated name.
+    """
+
+    manual_dit_filenames = set()
+    for preset_name in names:
+        if _is_auto_preset_name(preset_name):
+            continue
+        cfg = get_preset(preset_name)
+        manual_dit_filenames.add(Path(cfg.dit_path).name.casefold())
+
+    filtered: List[str] = []
+    for preset_name in names:
+        if _is_auto_preset_name(preset_name):
+            cfg = get_preset(preset_name)
+            dit_filename = Path(cfg.dit_path).name.casefold()
+            if dit_filename in manual_dit_filenames:
+                continue
+        filtered.append(preset_name)
+
+    return filtered
+
+
 def discoverable_preset_names() -> List[str]:
     """Return preset names; prefer discovered ones, otherwise fallback to all."""
     discovered = available_preset_names()
     if discovered:
-        return discovered
-    return list(PRESETS.keys())
+        return _hide_duplicate_auto_presets(discovered)
+    return _hide_duplicate_auto_presets(list(PRESETS.keys()))
 
 
 def refresh_discovered_presets() -> None:

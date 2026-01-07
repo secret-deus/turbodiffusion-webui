@@ -194,7 +194,7 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        return None, status, log_text, {}
+        return "", status, log_text, {}
 
 
 def create_demo():

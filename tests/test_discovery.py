@@ -20,6 +20,7 @@ sys.modules.setdefault(
 
 from webui.discovery import discover_checkpoints, infer_from_checkpoint
 from webui.schemas import _build_discovered_presets
+import webui.schemas as schemas
 
 
 def test_infer_from_checkpoint_parses_filename_tokens(tmp_path):
@@ -94,3 +95,54 @@ def test_discover_checkpoints_filters_to_wan21(tmp_path):
     discovered = discover_checkpoints(checkpoints_dir)
     assert good.stem in discovered
     assert bad.stem not in discovered
+
+
+def test_discoverable_preset_names_hides_duplicate_auto_presets(tmp_path, monkeypatch):
+    checkpoints_dir = tmp_path / "checkpoints"
+    checkpoints_host_dir = tmp_path / "checkpoints_host"
+    checkpoints_dir.mkdir()
+    checkpoints_host_dir.mkdir()
+
+    # shared deps exist in image checkpoints dir
+    (checkpoints_dir / "Wan2.1_VAE.pth").touch()
+    (checkpoints_dir / "models_t5_umt5-xxl-enc-bf16.pth").touch()
+
+    # DiT weights: one in host mount, one in image directory
+    (checkpoints_host_dir / "TurboWan2.1-T2V-1.3B-480P-quant.pth").touch()
+    (checkpoints_dir / "TurboWan2.1-T2V-14B-720P-quant.pth").touch()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MODEL_PATHS", f"{checkpoints_host_dir},{checkpoints_dir}")
+
+    manual_presets = {
+        "Wan2.1 T2V 1.3B 480p (quant)": schemas.EngineConfig(
+            name="Wan2.1 T2V 1.3B 480p (quant)",
+            dit_path="checkpoints/TurboWan2.1-T2V-1.3B-480P-quant.pth",
+            vae_path="checkpoints/Wan2.1_VAE.pth",
+            text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
+            model="Wan2.1-1.3B",
+            resolution="480p",
+            aspect_ratio="16:9",
+            quant_linear=True,
+            default_norm=False,
+        ),
+        "Wan2.1 T2V 14B 720p (quant)": schemas.EngineConfig(
+            name="Wan2.1 T2V 14B 720p (quant)",
+            dit_path="checkpoints/TurboWan2.1-T2V-14B-720P-quant.pth",
+            vae_path="checkpoints/Wan2.1_VAE.pth",
+            text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
+            model="Wan2.1-14B",
+            resolution="720p",
+            aspect_ratio="16:9",
+            quant_linear=True,
+            default_norm=False,
+        ),
+    }
+
+    discovered_presets = schemas._build_discovered_presets()
+    monkeypatch.setattr(schemas, "PRESETS", {**manual_presets, **discovered_presets})
+
+    names = schemas.discoverable_preset_names()
+
+    assert names == list(manual_presets.keys())
+    assert all(not preset.startswith("Auto:") for preset in names)
