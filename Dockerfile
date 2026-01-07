@@ -48,11 +48,6 @@ path = hf_hub_download(repo_id=repo_id, filename=filename, local_dir="checkpoint
 print("Downloaded:", path)
 PY
 
-# wget Wan2.1 VAE 和 T5 encoder（history 里是这样）
-#RUN wget -O ${CKPT_DIR}/Wan2.1_VAE.pth \
-#      https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/Wan2.1_VAE.pth && \
-#    wget -O ${CKPT_DIR}/models_t5_umt5-xxl-enc-bf16.pth \
-#      https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth
 RUN set -eux; \
     CKPT_DIR=/workspace/TurboDiffusion/checkpoints; \
     mkdir -p "$CKPT_DIR"; \
@@ -62,11 +57,6 @@ RUN set -eux; \
     wget -L --progress=dot:giga -O "$CKPT_DIR/models_t5_umt5-xxl-enc-bf16.pth" \
       https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth
 
-
-# 你历史里 COPY 了 14B 720P quant 大模型（本地文件复制进去）
-# 如果你也要保持一致，就把 checkpoints 文件夹放在 build context 里
-# COPY ./checkpoints/TurboWan2.1-T2V-14B-720P-quant.pth /workspace/TurboDiffusion/checkpoints/
-
 # 复制 WebUI
 COPY app_gradio.py /workspace/TurboDiffusion/turbodiffusion/app_gradio.py
 COPY webui/ /workspace/TurboDiffusion/turbodiffusion/webui/
@@ -75,18 +65,7 @@ ENV HF_HOME=/workspace/hf_cache
 ENV TRANSFORMERS_CACHE=/workspace/hf_cache
 ENV HF_HUB_DISABLE_TELEMETRY=1
 
-RUN python - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="google/umt5-xxl",
-    local_dir="/workspace/hf_cache/hub/models--google--umt5-xxl",
-    local_dir_use_symlinks=False,
-)
-print("umt5-xxl snapshot downloaded")
-PY
-
-ENV HF_HUB_OFFLINE=1
-ENV TRANSFORMERS_OFFLINE=1
+COPY hf_models/google/umt5-xxl/ /workspace/hf_cache/hub/models--google--umt5-xxl
 
 # 关键：固定 PYTHONPATH（这就是你之前解决 rcm 的手段）
 ENV PYTHONPATH=/workspace/TurboDiffusion/turbodiffusion

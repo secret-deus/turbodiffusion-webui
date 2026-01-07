@@ -19,7 +19,7 @@ services:
     volumes:
       - ./outputs:/workspace/TurboDiffusion/outputs
       # NOTE: Don't mount over /workspace/TurboDiffusion/checkpoints, otherwise you hide the checkpoints baked into the image.
-      - ./checkpoints:/workspace/TurboDiffusion/checkpoints_host
+      - ./models:/workspace/TurboDiffusion/checkpoints_host
     working_dir: /workspace/TurboDiffusion
     ports:
       - "17860:7860"
