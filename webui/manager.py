@@ -2,6 +2,7 @@ import torch
 from imaginaire.utils import log
 
 from webui.engine_wan21 import TurboWanT2VEngine
+from webui.engine_wan22_i2v import TurboWanI2VEngine
 from webui.utils import check_paths
 
 class EngineManager:
@@ -28,17 +29,30 @@ class EngineManager:
             self.unload()
 
         log.info(f"[Manager] Loading engine preset: {cfg.name}")
-        self.engine = TurboWanT2VEngine(
-            dit_path=cfg.dit_path,
-            vae_path=cfg.vae_path,
-            text_encoder_path=cfg.text_encoder_path,
-            model=cfg.model,
-            resolution=cfg.resolution,
-            aspect_ratio=cfg.aspect_ratio,
-            quant_linear=cfg.quant_linear,
-            default_norm=cfg.default_norm,
-            keep_dit_on_gpu=True,
-        )
+        if getattr(cfg, "dit_path_high", None):
+            self.engine = TurboWanI2VEngine(
+                low_noise_model_path=cfg.dit_path,
+                high_noise_model_path=cfg.dit_path_high,
+                vae_path=cfg.vae_path,
+                text_encoder_path=cfg.text_encoder_path,
+                model=cfg.model,
+                resolution=cfg.resolution,
+                aspect_ratio=cfg.aspect_ratio,
+                quant_linear=cfg.quant_linear,
+                default_norm=cfg.default_norm,
+            )
+        else:
+            self.engine = TurboWanT2VEngine(
+                dit_path=cfg.dit_path,
+                vae_path=cfg.vae_path,
+                text_encoder_path=cfg.text_encoder_path,
+                model=cfg.model,
+                resolution=cfg.resolution,
+                aspect_ratio=cfg.aspect_ratio,
+                quant_linear=cfg.quant_linear,
+                default_norm=cfg.default_norm,
+                keep_dit_on_gpu=True,
+            )
         self.cfg = cfg
         self.last_error = ""
         return self.engine

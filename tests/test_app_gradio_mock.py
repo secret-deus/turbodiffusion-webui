@@ -171,16 +171,23 @@ def test_generate_video_passes_init_image_for_i2v(monkeypatch, tmp_path):
     video_path, status, logs, meta = app_gradio.generate_video(
         preset_name,
         init_image=init_image,
-        i2v_strength=0.42,
+        i2v_adaptive_resolution=True,
+        i2v_boundary=0.9,
+        i2v_ode=True,
         **DEFAULT_ARGS,
     )
 
     assert engine.last_kwargs is not None
     assert engine.last_kwargs["init_image"] is init_image
-    assert engine.last_kwargs["i2v_strength"] == 0.42
+    assert engine.last_kwargs["adaptive_resolution"] is True
+    assert engine.last_kwargs["boundary"] == 0.9
+    assert engine.last_kwargs["ode"] is True
 
     assert video_path
     assert Path(video_path).exists()
     assert "i2v_" in Path(video_path).name
     assert status.startswith("✅ Done")
     assert meta.get("mode") == "i2v"
+    assert meta.get("adaptive_resolution") is True
+    assert meta.get("boundary") == 0.9
+    assert meta.get("ode") is True

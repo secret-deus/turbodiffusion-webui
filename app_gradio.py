@@ -132,12 +132,14 @@ def generate_video(
     keep_text_encoder,
     default_norm,
     init_image=None,
-    i2v_strength: float = 1.0,
+    i2v_adaptive_resolution: bool = True,
+    i2v_boundary: float = 0.9,
+    i2v_ode: bool = True,
 ):
     logs = []
     try:
         cfg = get_preset(preset_name)
-        is_i2v = "I2V" in (cfg.name or "").upper() or "I2V" in Path(cfg.dit_path).name.upper()
+        is_i2v = bool(getattr(cfg, "dit_path_high", None))
 
         if is_i2v and init_image is None:
             status = "❌ I2V preset selected, but no init image provided."
@@ -150,8 +152,10 @@ def generate_video(
             MANAGER.load(cfg)
 
         eng = MANAGER.engine
-        eng.keep_dit_on_gpu = bool(keep_dit_on_gpu)
-        eng.keep_text_encoder = bool(keep_text_encoder)
+        if hasattr(eng, "keep_dit_on_gpu"):
+            eng.keep_dit_on_gpu = bool(keep_dit_on_gpu)
+        if hasattr(eng, "keep_text_encoder"):
+            eng.keep_text_encoder = bool(keep_text_encoder)
 
         # seed handling
         if seed_mode == "random":
@@ -178,23 +182,39 @@ def generate_video(
 
         # run inference
         t0 = time.time()
-        out_path = eng.generate(
-            prompt=prompt,
-            num_steps=int(num_steps),
-            num_frames=int(num_frames),
-            seed=int(seed),
-            num_samples=int(num_samples),
-            attention_type=attention_type,
-            sla_topk=float(sla_topk),
-            sigma_max=float(sigma_max),
-            default_norm=bool(default_norm),
-            init_image=init_image,
-            i2v_strength=float(i2v_strength) if i2v_strength is not None else 1.0,
-            save_path=str(save_path),
-            fps=int(fps),
-            progress_cb=progress_cb,
-            log_cb=log_cb,
-        )
+        if is_i2v:
+            out_path = eng.generate(
+                prompt=prompt,
+                init_image=init_image,
+                num_steps=int(num_steps),
+                num_frames=int(num_frames),
+                seed=int(seed),
+                num_samples=int(num_samples),
+                adaptive_resolution=bool(i2v_adaptive_resolution),
+                boundary=float(i2v_boundary),
+                ode=bool(i2v_ode),
+                sigma_max=float(sigma_max),
+                save_path=str(save_path),
+                fps=int(fps),
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+            )
+        else:
+            out_path = eng.generate(
+                prompt=prompt,
+                num_steps=int(num_steps),
+                num_frames=int(num_frames),
+                seed=int(seed),
+                num_samples=int(num_samples),
+                attention_type=attention_type,
+                sla_topk=float(sla_topk),
+                sigma_max=float(sigma_max),
+                default_norm=bool(default_norm),
+                save_path=str(save_path),
+                fps=int(fps),
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+            )
         out_path = Path(out_path)
         if out_path.is_dir() or not out_path.exists():
             err = f"❌ invalid output path: {out_path}"
@@ -218,7 +238,9 @@ def generate_video(
             "sec": round(t1 - t0, 2),
         }
         if is_i2v:
-            meta["i2v_strength"] = float(i2v_strength) if i2v_strength is not None else 1.0
+            meta["adaptive_resolution"] = bool(i2v_adaptive_resolution)
+            meta["boundary"] = float(i2v_boundary)
+            meta["ode"] = bool(i2v_ode)
 
         # outputs:
         # - video player expects file path
@@ -281,16 +303,36 @@ def create_demo():
 
                         with gr.Accordion("Quality & Speed", open=True):
                             # SageSLA may be disabled if SpargeAttn missing
-                            attention_type = gr.Dropdown(["sla", "sagesla", "original"], value="sla", label="Attention Type")
+                            attention_type = gr.Dropdown(
+                                ["sla", "sagesla", "original"],
+                                value=("sagesla" if default_is_i2v else "sla"),
+                                label="Attention Type",
+                            )
                             sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k (sla/sagesla)")
-                            sigma_max = gr.Slider(10, 120, value=80, step=1, label="sigma_max")
+                            sigma_max = gr.Slider(
+                                10,
+                                200,
+                                value=(200 if default_is_i2v else 80),
+                                step=1,
+                                label="sigma_max",
+                            )
                             default_norm = gr.Checkbox(value=False, label="default_norm (faster norm)")
-                            i2v_strength = gr.Slider(
+                            i2v_adaptive_resolution = gr.Checkbox(
+                                value=True,
+                                label="I2V adaptive resolution (match init image aspect)",
+                                visible=default_is_i2v,
+                            )
+                            i2v_boundary = gr.Slider(
                                 0.0,
                                 1.0,
-                                value=1.0,
+                                value=0.9,
                                 step=0.01,
-                                label="I2V strength (0=keep image, 1=free)",
+                                label="I2V boundary (high→low noise switch)",
+                                visible=default_is_i2v,
+                            )
+                            i2v_ode = gr.Checkbox(
+                                value=True,
+                                label="I2V ODE sampling (sharper, less robust)",
                                 visible=default_is_i2v,
                             )
 
@@ -359,7 +401,9 @@ def create_demo():
                         keep_dit_on_gpu, keep_text_encoder,
                         default_norm,
                         init_image,
-                        i2v_strength,
+                        i2v_adaptive_resolution,
+                        i2v_boundary,
+                        i2v_ode,
                     ],
                     outputs=[out_video, status_md, log_box, last_meta_state],
                     concurrency_id="gpu",
@@ -369,10 +413,34 @@ def create_demo():
                 def _on_preset_change(name: str):
                     is_i2v = "I2V" in (name or "").upper()
                     img_update = gr.update(visible=True) if is_i2v else gr.update(visible=False, value=None)
-                    strength_update = gr.update(visible=is_i2v)
-                    return preset_details(name), img_update, strength_update
+                    adaptive_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
+                    boundary_update = gr.update(visible=is_i2v, value=0.9)
+                    ode_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
+                    sigma_update = gr.update(value=200 if is_i2v else 80)
+                    attn_update = gr.update(value="sagesla" if is_i2v else "sla")
+                    return (
+                        preset_details(name),
+                        img_update,
+                        adaptive_update,
+                        boundary_update,
+                        ode_update,
+                        sigma_update,
+                        attn_update,
+                    )
 
-                preset.change(_on_preset_change, inputs=[preset], outputs=[preset_info, init_image, i2v_strength])
+                preset.change(
+                    _on_preset_change,
+                    inputs=[preset],
+                    outputs=[
+                        preset_info,
+                        init_image,
+                        i2v_adaptive_resolution,
+                        i2v_boundary,
+                        i2v_ode,
+                        sigma_max,
+                        attention_type,
+                    ],
+                )
 
                 run_evt.then(
                     fn=_after_gen,

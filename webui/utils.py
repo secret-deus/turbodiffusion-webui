@@ -25,7 +25,12 @@ def gpu_info():
 
 def check_paths(cfg):
     missing = []
-    for p in [cfg.dit_path, cfg.vae_path, cfg.text_encoder_path]:
+    paths = [cfg.dit_path, cfg.vae_path, cfg.text_encoder_path]
+    dit_path_high = getattr(cfg, "dit_path_high", None)
+    if dit_path_high:
+        paths.append(dit_path_high)
+
+    for p in paths:
         if not os.path.exists(p):
             missing.append(p)
     return missing

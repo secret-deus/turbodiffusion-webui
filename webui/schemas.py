@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -64,6 +65,7 @@ def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
         dit_path=_resolve_checkpoint_path(cfg.dit_path, roots),
         vae_path=_resolve_checkpoint_path(cfg.vae_path, roots),
         text_encoder_path=_resolve_checkpoint_path(cfg.text_encoder_path, roots),
+        dit_path_high=_resolve_checkpoint_path(cfg.dit_path_high, roots) if cfg.dit_path_high else None,
         model=cfg.model,
         resolution=cfg.resolution,
         aspect_ratio=cfg.aspect_ratio,
@@ -76,6 +78,7 @@ def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
 def create_preset(
     name: str,
     dit_path: str,
+    dit_path_high: str = None,
     vae_path: str = None,
     text_encoder_path: str = None,
     model: str = None,
@@ -111,6 +114,7 @@ def create_preset(
         dit_path=dit_path,
         vae_path=vae_path or DEFAULT_VAE_PATH,
         text_encoder_path=text_encoder_path or DEFAULT_TEXT_ENCODER_PATH,
+        dit_path_high=dit_path_high,
         model=model or inferred.get("model") or "Wan2.1-1.3B",
         resolution=resolution or inferred.get("resolution") or "480p",
         aspect_ratio=aspect_ratio or inferred.get("aspect_ratio") or "16:9",
@@ -126,6 +130,7 @@ class EngineConfig:
     dit_path: str
     vae_path: str
     text_encoder_path: str
+    dit_path_high: str | None = None
     model: str = "Wan2.1-1.3B"
     resolution: str = "480p"
     aspect_ratio: str = "16:9"
@@ -170,29 +175,23 @@ PRESETS = {
 
     # Wan2.2 I2V 模型（A14B 720p）
     #
-    # Upstream checkpoint naming follows:
-    # - TurboWan2.2-I2V-A14B-{low,high}-720P[-quant].pth
+    # Note: Wan2.2 I2V inference requires *both* low-noise and high-noise DiT
+    # checkpoints. We store the low-noise path in ``dit_path`` and the
+    # high-noise path in ``dit_path_high``.
     #
-    # We provide curated names for each variant so the WebUI list stays stable
-    # even when auto-discovery is disabled (e.g. missing deps or missing paths).
-    "Wan2.2 I2V A14B 720p (low, quant)": create_preset(
-        name="Wan2.2 I2V A14B 720p (low, quant)",
+    # Upstream naming:
+    # - TurboWan2.2-I2V-A14B-low-720P[-quant].pth
+    # - TurboWan2.2-I2V-A14B-high-720P[-quant].pth
+    "Wan2.2 I2V A14B 720p (quant)": create_preset(
+        name="Wan2.2 I2V A14B 720p (quant)",
         dit_path="checkpoints/TurboWan2.2-I2V-A14B-low-720P-quant.pth",
+        dit_path_high="checkpoints/TurboWan2.2-I2V-A14B-high-720P-quant.pth",
         # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=True
     ),
-    "Wan2.2 I2V A14B 720p (low, fp16)": create_preset(
-        name="Wan2.2 I2V A14B 720p (low, fp16)",
+    "Wan2.2 I2V A14B 720p (fp16)": create_preset(
+        name="Wan2.2 I2V A14B 720p (fp16)",
         dit_path="checkpoints/TurboWan2.2-I2V-A14B-low-720P.pth",
-        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=False
-    ),
-    "Wan2.2 I2V A14B 720p (high, quant)": create_preset(
-        name="Wan2.2 I2V A14B 720p (high, quant)",
-        dit_path="checkpoints/TurboWan2.2-I2V-A14B-high-720P-quant.pth",
-        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=True
-    ),
-    "Wan2.2 I2V A14B 720p (high, fp16)": create_preset(
-        name="Wan2.2 I2V A14B 720p (high, fp16)",
-        dit_path="checkpoints/TurboWan2.2-I2V-A14B-high-720P.pth",
+        dit_path_high="checkpoints/TurboWan2.2-I2V-A14B-high-720P.pth",
         # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=False
     ),
 }
@@ -235,30 +234,92 @@ def _build_discovered_presets() -> Dict[str, EngineConfig]:
     vae_default = default_dir / "Wan2.1_VAE.pth"
     text_encoder_default = default_dir / "models_t5_umt5-xxl-enc-bf16.pth"
 
+    all_checkpoints: List[Path] = []
+    seen_paths: set[str] = set()
     for checkpoints_dir in _discovery_dirs():
-        for stem, path in discover_checkpoints(checkpoints_dir).items():
-            fields, info = infer_from_checkpoint(path)
+        for path in discover_checkpoints(checkpoints_dir).values():
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            key = str(resolved)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            all_checkpoints.append(path)
 
-            name_base = str(fields.get("name") or f"Auto: {stem}")
-            name = name_base
-            idx = 1
-            while name in discovered:
-                idx += 1
-                name = f"{name_base} ({idx})"
+    # Pair Wan2.2 I2V checkpoints: (low/high) must be loaded together.
+    i2v_pattern = re.compile(
+        r"^TurboWan2\.2-I2V-(?P<size>[A-Za-z0-9]+)-(?P<noise>low|high)-(?P<res>[0-9]+P)(?P<quant>-quant)?$",
+        re.IGNORECASE,
+    )
+    i2v_groups: Dict[str, Dict[str, Path]] = {}
+    t2v_paths: List[Path] = []
 
-            cfg = EngineConfig(
-                name=name,
-                dit_path=str(path),
-                vae_path=str(fields.get("vae_path") or vae_default),
-                text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
-                model=str(fields.get("model") or EngineConfig.model),
-                resolution=str(fields.get("resolution") or EngineConfig.resolution),
-                aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
-                quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
-                default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
-                info=info,
-            )
-            discovered[cfg.name] = cfg
+    for path in all_checkpoints:
+        m = i2v_pattern.match(path.stem)
+        if not m:
+            t2v_paths.append(path)
+            continue
+        base_stem = f"TurboWan2.2-I2V-{m.group('size')}-{m.group('res')}{m.group('quant') or ''}"
+        noise = m.group("noise").lower()
+        group = i2v_groups.setdefault(base_stem, {})
+        group.setdefault(noise, path)
+
+    for path in t2v_paths:
+        fields, info = infer_from_checkpoint(path)
+
+        name_base = str(fields.get("name") or f"Auto: {path.stem}")
+        name = name_base
+        idx = 1
+        while name in discovered:
+            idx += 1
+            name = f"{name_base} ({idx})"
+
+        cfg = EngineConfig(
+            name=name,
+            dit_path=str(path),
+            vae_path=str(fields.get("vae_path") or vae_default),
+            text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
+            model=str(fields.get("model") or EngineConfig.model),
+            resolution=str(fields.get("resolution") or EngineConfig.resolution),
+            aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
+            quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
+            default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
+            info=info,
+        )
+        discovered[cfg.name] = cfg
+
+    for base_stem, parts in sorted(i2v_groups.items()):
+        low_path = parts.get("low")
+        high_path = parts.get("high")
+        if not low_path or not high_path:
+            # Avoid exposing half-configured I2V entries that can't run.
+            continue
+
+        fields, info = infer_from_checkpoint(low_path)
+
+        name_base = str(fields.get("name") or f"Auto: {base_stem}")
+        name = name_base
+        idx = 1
+        while name in discovered:
+            idx += 1
+            name = f"{name_base} ({idx})"
+
+        cfg = EngineConfig(
+            name=name,
+            dit_path=str(low_path),
+            dit_path_high=str(high_path),
+            vae_path=str(fields.get("vae_path") or vae_default),
+            text_encoder_path=str(fields.get("text_encoder_path") or text_encoder_default),
+            model=str(fields.get("model") or EngineConfig.model),
+            resolution=str(fields.get("resolution") or EngineConfig.resolution),
+            aspect_ratio=str(fields.get("aspect_ratio") or EngineConfig.aspect_ratio),
+            quant_linear=bool(fields.get("quant_linear", EngineConfig.quant_linear)),
+            default_norm=bool(fields.get("default_norm", EngineConfig.default_norm)),
+            info=info,
+        )
+        discovered[cfg.name] = cfg
     return discovered
 
 
@@ -308,14 +369,21 @@ def _hide_duplicate_auto_presets(names: List[str]) -> List[str]:
             continue
         cfg = get_preset(preset_name)
         manual_dit_filenames.add(Path(cfg.dit_path).name.casefold())
+        if cfg.dit_path_high:
+            manual_dit_filenames.add(Path(cfg.dit_path_high).name.casefold())
 
     filtered: List[str] = []
     for preset_name in names:
         if _is_auto_preset_name(preset_name):
             cfg = get_preset(preset_name)
             dit_filename = Path(cfg.dit_path).name.casefold()
-            if dit_filename in manual_dit_filenames:
-                continue
+            if cfg.dit_path_high:
+                high_filename = Path(cfg.dit_path_high).name.casefold()
+                if dit_filename in manual_dit_filenames and high_filename in manual_dit_filenames:
+                    continue
+            else:
+                if dit_filename in manual_dit_filenames:
+                    continue
         filtered.append(preset_name)
 
     return filtered
@@ -356,6 +424,7 @@ def preset_details(name: str) -> str:
             f"- resolution: `{cfg.resolution}` | aspect: `{cfg.aspect_ratio}`",
             f"- quant_linear: `{cfg.quant_linear}` | default_norm: `{cfg.default_norm}`",
             f"- DiT: `{cfg.dit_path}`",
+            *([f"- DiT (high-noise): `{cfg.dit_path_high}`"] if cfg.dit_path_high else []),
             f"- VAE: `{cfg.vae_path}`",
             f"- Text encoder: `{cfg.text_encoder_path}`",
         ]
