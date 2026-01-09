@@ -506,19 +506,37 @@ class TurboWanT2VEngine:
         img_t = img_t * 2.0 - 1.0
         img_t = img_t.to(device=device, dtype=torch.float32)
 
+        img_t_4d = img_t
+        img_t_5d = img_t.unsqueeze(2)  # (B,C,1,H,W) for video-first encoders
+
         if log_cb:
-            log_cb(f"[Engine] Init image prepared: shape={tuple(img_t.shape)} target={width}x{height}")
+            log_cb(
+                f"[Engine] Init image prepared: image={tuple(img_t_4d.shape)} "
+                f"video={tuple(img_t_5d.shape)} target={width}x{height}"
+            )
 
         latent = None
         for method_name in ("encode", "encode_image", "encode_images", "encode_video"):
             fn = getattr(self.tokenizer, method_name, None)
             if fn is None:
                 continue
-            try:
-                latent = fn(img_t)
-            except TypeError:
-                # Some versions may require keyword args, but we keep it minimal.
-                continue
+            candidates = [img_t_4d, img_t_5d]
+            if method_name in ("encode", "encode_video"):
+                candidates = [img_t_5d, img_t_4d]
+
+            for candidate in candidates:
+                try:
+                    latent = fn(candidate)
+                except TypeError:
+                    # Some versions may require keyword args, but we keep it minimal.
+                    continue
+                except IndexError as exc:
+                    # Typical mismatch: encoder expects (B,C,T,H,W) but got (B,C,H,W)
+                    if "too many indices" in str(exc):
+                        continue
+                    raise
+                if latent is not None:
+                    break
             if latent is not None:
                 break
 
