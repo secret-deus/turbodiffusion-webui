@@ -1,6 +1,9 @@
 import torch
 from imaginaire.utils import log
 
+from pathlib import Path
+import re
+
 from webui.engine_wan21 import TurboWanT2VEngine
 from webui.engine_wan22_i2v import TurboWanI2VEngine
 from webui.utils import check_paths
@@ -29,10 +32,24 @@ class EngineManager:
             self.unload()
 
         log.info(f"[Manager] Loading engine preset: {cfg.name}")
-        if getattr(cfg, "dit_path_high", None):
+        model_name = str(getattr(cfg, "model", "") or "")
+        is_wan22 = model_name.startswith("Wan2.2")
+
+        if is_wan22:
+            if not getattr(cfg, "dit_path_high", None):
+                raise FileNotFoundError(
+                    "Wan2.2 I2V requires both low-noise and high-noise checkpoints. "
+                    "Missing `dit_path_high`."
+                )
+
+            low_path = cfg.dit_path
+            high_path = cfg.dit_path_high
+            if re.search(r"(?i)-high-", Path(low_path).stem) and re.search(r"(?i)-low-", Path(high_path).stem):
+                low_path, high_path = high_path, low_path
+
             self.engine = TurboWanI2VEngine(
-                low_noise_model_path=cfg.dit_path,
-                high_noise_model_path=cfg.dit_path_high,
+                low_noise_model_path=low_path,
+                high_noise_model_path=high_path,
                 vae_path=cfg.vae_path,
                 text_encoder_path=cfg.text_encoder_path,
                 model=cfg.model,

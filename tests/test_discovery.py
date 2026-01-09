@@ -49,6 +49,48 @@ def test_infer_from_checkpoint_parses_wan22_i2v_tokens(tmp_path):
     assert "model=Wan2.2-A14B" in info
 
 
+def test_get_preset_infers_wan22_i2v_pair(tmp_path, monkeypatch):
+    checkpoints_dir = tmp_path / "checkpoints"
+    checkpoints_dir.mkdir()
+
+    # shared deps
+    (checkpoints_dir / "Wan2.1_VAE.pth").touch()
+    (checkpoints_dir / "models_t5_umt5-xxl-enc-bf16.pth").touch()
+
+    low = checkpoints_dir / "TurboWan2.2-I2V-A14B-low-720P-quant.pth"
+    high = checkpoints_dir / "TurboWan2.2-I2V-A14B-high-720P-quant.pth"
+    low.touch()
+    high.touch()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MODEL_PATHS", str(checkpoints_dir))
+
+    # simulate legacy preset that only points to one checkpoint
+    monkeypatch.setattr(
+        schemas,
+        "PRESETS",
+        {
+            "Legacy I2V": schemas.EngineConfig(
+                name="Legacy I2V",
+                dit_path="checkpoints/TurboWan2.2-I2V-A14B-low-720P-quant.pth",
+                vae_path="checkpoints/Wan2.1_VAE.pth",
+                text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
+                model="Wan2.2-A14B",
+                resolution="720p",
+                aspect_ratio="16:9",
+                quant_linear=True,
+                default_norm=False,
+            )
+        },
+    )
+
+    cfg = schemas.get_preset("Legacy I2V")
+
+    assert cfg.dit_path_high is not None
+    assert Path(cfg.dit_path).name == low.name
+    assert Path(cfg.dit_path_high).name == high.name
+
+
 def test_infer_from_checkpoint_applies_sidecar_overrides(tmp_path):
     ckpt = tmp_path / "TurboWan2.1-T2V-14B-720P-quant.pth"
     ckpt.touch()

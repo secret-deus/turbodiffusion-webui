@@ -66,6 +66,8 @@ def refresh_system():
 def validate_paths(preset_name):
     cfg = get_preset(preset_name)
     missing = check_paths(cfg)
+    if str(getattr(cfg, "model", "") or "").startswith("Wan2.2") and not getattr(cfg, "dit_path_high", None):
+        missing = [*missing, "dit_path_high (Wan2.2 I2V requires high-noise checkpoint)"]
     if missing:
         return "❌ Missing files:\n" + "\n".join(missing)
     return "✅ All checkpoint files exist."
@@ -139,7 +141,8 @@ def generate_video(
     logs = []
     try:
         cfg = get_preset(preset_name)
-        is_i2v = bool(getattr(cfg, "dit_path_high", None))
+        model_name = str(getattr(cfg, "model", "") or "")
+        is_i2v = model_name.startswith("Wan2.2")
 
         if is_i2v and init_image is None:
             status = "❌ I2V preset selected, but no init image provided."
@@ -277,7 +280,7 @@ def create_demo():
             with gr.Tab("Generate"):
                 with gr.Row():
                     with gr.Column(scale=4):
-                        default_is_i2v = "I2V" in DEFAULT_PRESET.upper()
+                        default_is_i2v = "WAN2.2" in DEFAULT_PRESET.upper()
                         preset = gr.Dropdown(
                             choices=PRESET_CHOICES,
                             value=DEFAULT_PRESET,
@@ -411,7 +414,7 @@ def create_demo():
                 )
 
                 def _on_preset_change(name: str):
-                    is_i2v = "I2V" in (name or "").upper()
+                    is_i2v = "WAN2.2" in (name or "").upper()
                     img_update = gr.update(visible=True) if is_i2v else gr.update(visible=False, value=None)
                     adaptive_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
                     boundary_update = gr.update(visible=is_i2v, value=0.9)

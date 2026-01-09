@@ -1,6 +1,6 @@
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List
 
@@ -73,6 +73,71 @@ def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
         default_norm=cfg.default_norm,
         info=cfg.info,
     )
+
+
+def _infer_wan22_i2v_pair(dit_path: str) -> tuple[str | None, str | None]:
+    """Return (low_path, high_path) inferred from a single Wan2.2 I2V checkpoint path."""
+
+    path = Path(dit_path)
+    stem = path.stem
+
+    # Most common naming: ...-low-... or ...-high-...
+    if re.search(r"(?i)-low-", stem):
+        low_stem = stem
+        high_stem = re.sub(r"(?i)-low-", "-high-", stem, count=1)
+    elif re.search(r"(?i)-high-", stem):
+        high_stem = stem
+        low_stem = re.sub(r"(?i)-high-", "-low-", stem, count=1)
+    else:
+        # Legacy naming without noise token: TurboWan2.2-I2V-<SIZE>-<RES>[-quant].pth
+        m = re.match(
+            r"(?i)^(TurboWan2\.2-I2V-[A-Za-z0-9]+)-(?P<res>[0-9]+P)(?P<quant>-quant)?$",
+            stem,
+        )
+        if not m:
+            return None, None
+        prefix = m.group(1)
+        res = m.group("res")
+        quant = m.group("quant") or ""
+        low_stem = f"{prefix}-low-{res}{quant}"
+        high_stem = f"{prefix}-high-{res}{quant}"
+
+    low_path = str(path.with_name(f"{low_stem}{path.suffix}"))
+    high_path = str(path.with_name(f"{high_stem}{path.suffix}"))
+    return low_path, high_path
+
+
+def _maybe_attach_wan22_i2v_high_path(cfg: "EngineConfig") -> "EngineConfig":
+    """Fill missing ``dit_path_high`` for Wan2.2 I2V presets when possible.
+
+    This keeps older presets (that only specified a single low/high path) usable
+    and ensures the manager routes to the correct I2V engine.
+    """
+
+    name_upper = (cfg.name or "").upper()
+    dit_filename = Path(cfg.dit_path).name.upper()
+    if "I2V" not in name_upper and "I2V" not in dit_filename:
+        return cfg
+
+    low_path = cfg.dit_path
+    high_path = cfg.dit_path_high
+
+    if not high_path:
+        inferred_low, inferred_high = _infer_wan22_i2v_pair(cfg.dit_path)
+        if not inferred_low or not inferred_high:
+            return cfg
+        roots = _model_search_roots()
+        low_path = _resolve_checkpoint_path(inferred_low, roots)
+        high_path = _resolve_checkpoint_path(inferred_high, roots)
+    else:
+        # Normalize swapped assignments if user provided them in reverse.
+        if re.search(r"(?i)-high-", Path(low_path).stem) and re.search(r"(?i)-low-", Path(high_path).stem):
+            low_path, high_path = high_path, low_path
+
+    if not high_path:
+        return cfg
+
+    return replace(cfg, dit_path=low_path, dit_path_high=high_path)
 
 
 def create_preset(
@@ -248,23 +313,12 @@ def _build_discovered_presets() -> Dict[str, EngineConfig]:
             seen_paths.add(key)
             all_checkpoints.append(path)
 
-    # Pair Wan2.2 I2V checkpoints: (low/high) must be loaded together.
-    i2v_pattern = re.compile(
-        r"^TurboWan2\.2-I2V-(?P<size>[A-Za-z0-9]+)-(?P<noise>low|high)-(?P<res>[0-9]+P)(?P<quant>-quant)?$",
-        re.IGNORECASE,
-    )
-    i2v_groups: Dict[str, Dict[str, Path]] = {}
     t2v_paths: List[Path] = []
-
     for path in all_checkpoints:
-        m = i2v_pattern.match(path.stem)
-        if not m:
-            t2v_paths.append(path)
+        stem_upper = path.stem.upper()
+        if "WAN2.2" in stem_upper and "I2V" in stem_upper:
             continue
-        base_stem = f"TurboWan2.2-I2V-{m.group('size')}-{m.group('res')}{m.group('quant') or ''}"
-        noise = m.group("noise").lower()
-        group = i2v_groups.setdefault(base_stem, {})
-        group.setdefault(noise, path)
+        t2v_paths.append(path)
 
     for path in t2v_paths:
         fields, info = infer_from_checkpoint(path)
@@ -290,13 +344,43 @@ def _build_discovered_presets() -> Dict[str, EngineConfig]:
         )
         discovered[cfg.name] = cfg
 
-    for base_stem, parts in sorted(i2v_groups.items()):
-        low_path = parts.get("low")
-        high_path = parts.get("high")
-        if not low_path or not high_path:
-            # Avoid exposing half-configured I2V entries that can't run.
+    # Wan2.2 I2V checkpoints must be discovered as (low/high) pairs.
+    # We infer the sibling path from either checkpoint name, then only expose
+    # the preset if *both* files exist. This prevents half-configured Wan2.2
+    # entries from ever showing up in the UI list.
+    seen_pairs: set[str] = set()
+    for path in all_checkpoints:
+        stem_upper = path.stem.upper()
+        if "WAN2.2" not in stem_upper or "I2V" not in stem_upper:
             continue
 
+        inferred_low, inferred_high = _infer_wan22_i2v_pair(str(path))
+        if not inferred_low or not inferred_high:
+            continue
+
+        low_path = Path(inferred_low)
+        high_path = Path(inferred_high)
+        if not low_path.exists() or not high_path.exists():
+            continue
+
+        try:
+            low_key = str(low_path.resolve())
+        except Exception:
+            low_key = str(low_path)
+        try:
+            high_key = str(high_path.resolve())
+        except Exception:
+            high_key = str(high_path)
+
+        pair_key = "|".join(sorted([low_key, high_key]))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+
+        if re.search(r"(?i)-high-", low_path.stem) and re.search(r"(?i)-low-", high_path.stem):
+            low_path, high_path = high_path, low_path
+
+        base_stem = re.sub(r"(?i)-(low|high)-", "-", low_path.stem, count=1)
         fields, info = infer_from_checkpoint(low_path)
 
         name_base = str(fields.get("name") or f"Auto: {base_stem}")
@@ -332,15 +416,22 @@ def load_presets() -> Dict[str, EngineConfig]:
 def get_preset(name: str) -> EngineConfig:
     """Return preset config by name, resolved against MODEL_PATHS search roots."""
     cfg = PRESETS[name]
-    return _resolve_preset_paths(cfg)
+    resolved = _resolve_preset_paths(cfg)
+    return _maybe_attach_wan22_i2v_high_path(resolved)
 
 
 def available_preset_names() -> List[str]:
     """Return preset names whose checkpoint files all exist within search roots."""
     available = []
     for name, cfg in PRESETS.items():
-        resolved = _resolve_preset_paths(cfg)
-        if not check_paths(resolved):
+        resolved = get_preset(name)
+        missing = check_paths(resolved)
+        if str(getattr(resolved, "model", "") or "").startswith("Wan2.2") and not getattr(
+            resolved, "dit_path_high", None
+        ):
+            missing = [*missing, "dit_path_high (Wan2.2 I2V requires high-noise checkpoint)"]
+
+        if not missing:
             available.append(name)
     return available
 
@@ -411,6 +502,8 @@ def preset_details(name: str) -> str:
 
     cfg = get_preset(name)
     missing = check_paths(cfg)
+    if str(getattr(cfg, "model", "") or "").startswith("Wan2.2") and not getattr(cfg, "dit_path_high", None):
+        missing = [*missing, "dit_path_high (Wan2.2 I2V requires high-noise checkpoint)"]
 
     status = "✅" if not missing else "❌"
     lines = [f"### {status} {cfg.name}"]
