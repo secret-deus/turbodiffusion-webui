@@ -9,9 +9,17 @@ RESOLUTION_MAP: Dict[str, Tuple[str, str]] = {
     "720P": ("720p", "16:9"),
 }
 
+# 模型大小映射 - 支持 T2V 和 I2V
 SIZE_MODEL_MAP = {
     "1.3B": "Wan2.1-1.3B",
     "14B": "Wan2.1-14B",
+    "A14B": "Wan2.2-A14B",  # Wan2.2 I2V A14B 模型
+}
+
+# 模型版本映射
+VERSION_MAP = {
+    "2.1": "Wan2.1",
+    "2.2": "Wan2.2",
 }
 
 
@@ -66,11 +74,22 @@ def infer_from_checkpoint(ckpt_path: Path) -> Tuple[Dict[str, object], str]:
             inferred["resolution"], inferred["aspect_ratio"] = RESOLUTION_MAP[token]
             break
 
-    # model size tokens like 1.3B / 14B
+    # model size tokens like 1.3B / 14B / A14B
     for token in tokens:
         if token in SIZE_MODEL_MAP:
             inferred["model"] = SIZE_MODEL_MAP[token]
             break
+
+    # version detection (Wan2.1, Wan2.2)
+    # 如果在 SIZE_MODEL_MAP 中已经匹配到带版本的模型名，则使用它
+    # 否则尝试从文件名推断版本
+    if "model" not in inferred:
+        for token in tokens:
+            if token in VERSION_MAP:
+                # 如果有版本但没有模型，使用默认模型
+                version = VERSION_MAP[token]
+                inferred["model"] = f"{version}-14B"  # 默认 14B
+                break
 
     overrides = _load_sidecar(ckpt_path)
 
@@ -113,14 +132,20 @@ def infer_from_checkpoint(ckpt_path: Path) -> Tuple[Dict[str, object], str]:
 def discover_checkpoints(checkpoints_dir: Path) -> Dict[str, Path]:
     """Return a mapping of discovered checkpoint names to paths.
 
-    We only consider Wan2.1 Turbo checkpoints to avoid picking up unrelated
-    weights that may live in the same folder.
+    We consider Wan2.x Turbo checkpoints (T2V and I2V) to avoid picking up
+    unrelated weights that may live in the same folder.
     """
 
     discovered: Dict[str, Path] = {}
     if not checkpoints_dir.exists():
         return discovered
 
+    # 发现 T2V 模型（Wan2.1）
     for path in checkpoints_dir.glob("*Wan2.1*T2V*.pth"):
         discovered[path.stem] = path
+
+    # 发现 I2V 模型（Wan2.2）
+    for path in checkpoints_dir.glob("*Wan2.2*I2V*.pth"):
+        discovered[path.stem] = path
+
     return discovered

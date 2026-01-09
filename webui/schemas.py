@@ -11,6 +11,10 @@ from webui import preset_loader
 
 DEFAULT_MODEL_ROOT = "/workspace/TurboDiffusion/checkpoints"
 
+# 公共默认路径 - 参数复用
+DEFAULT_VAE_PATH = "checkpoints/Wan2.1_VAE.pth"
+DEFAULT_TEXT_ENCODER_PATH = "checkpoints/models_t5_umt5-xxl-enc-bf16.pth"
+
 
 def _model_search_roots() -> List[Path]:
     env_value = os.environ.get("MODEL_PATHS", "")
@@ -68,6 +72,54 @@ def _resolve_preset_paths(cfg: "EngineConfig") -> "EngineConfig":
         info=cfg.info,
     )
 
+
+def create_preset(
+    name: str,
+    dit_path: str,
+    vae_path: str = None,
+    text_encoder_path: str = None,
+    model: str = None,
+    resolution: str = None,
+    aspect_ratio: str = None,
+    quant_linear: bool = None,
+    default_norm: bool = None,
+    info: str = "",
+) -> "EngineConfig":
+    """智能创建预设配置，自动推断参数并复用公共路径。
+
+    参数：
+        name: 预设名称
+        dit_path: DiT checkpoint 路径（必需）
+        vae_path: VAE 路径（可选，默认使用 DEFAULT_VAE_PATH）
+        text_encoder_path: Text encoder 路径（可选，默认使用 DEFAULT_TEXT_ENCODER_PATH）
+        model: 模型类型（可选，从 dit_path 自动推断）
+        resolution: 分辨率（可选，从 dit_path 自动推断）
+        aspect_ratio: 宽高比（可选，从 dit_path 自动推断）
+        quant_linear: 是否量化（可选，从 dit_path 自动推断）
+        default_norm: 是否使用默认归一化（可选，默认 False）
+        info: 额外信息
+
+    返回：
+        完整的 EngineConfig 对象
+    """
+    # 从 dit_path 推断参数
+    inferred, auto_info = infer_from_checkpoint(Path(dit_path))
+
+    # 使用提供的参数覆盖推断结果，否则使用推断值或默认值
+    return EngineConfig(
+        name=name,
+        dit_path=dit_path,
+        vae_path=vae_path or DEFAULT_VAE_PATH,
+        text_encoder_path=text_encoder_path or DEFAULT_TEXT_ENCODER_PATH,
+        model=model or inferred.get("model") or "Wan2.1-1.3B",
+        resolution=resolution or inferred.get("resolution") or "480p",
+        aspect_ratio=aspect_ratio or inferred.get("aspect_ratio") or "16:9",
+        quant_linear=quant_linear if quant_linear is not None else inferred.get("quant_linear", False),
+        default_norm=default_norm if default_norm is not None else inferred.get("default_norm", False),
+        info=info or auto_info,
+    )
+
+
 @dataclass(frozen=True)
 class EngineConfig:
     name: str
@@ -81,42 +133,52 @@ class EngineConfig:
     default_norm: bool = False
     info: str = ""
 
+# 使用智能工厂函数创建预设 - 自动推断参数并复用公共路径
 PRESETS = {
-    "Wan2.1 T2V 1.3B 480p (quant)": EngineConfig(
+    # Wan2.1 T2V 模型
+    "Wan2.1 T2V 1.3B 480p (quant)": create_preset(
         name="Wan2.1 T2V 1.3B 480p (quant)",
         dit_path="checkpoints/TurboWan2.1-T2V-1.3B-480P-quant.pth",
-        vae_path="checkpoints/Wan2.1_VAE.pth",
-        text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
-        model="Wan2.1-1.3B",
-        resolution="480p",
-        aspect_ratio="16:9",
-        quant_linear=True,
-        default_norm=False,
+        # quant_linear、model、resolution、aspect_ratio 均从文件名自动推断
+        # vae_path 和 text_encoder_path 使用默认公共路径
     ),
-    "Wan2.1 T2V 14B 720p (quant, 5090 recommended)": EngineConfig(
+    "Wan2.1 T2V 1.3B 480p (fp16)": create_preset(
+        name="Wan2.1 T2V 1.3B 480p (fp16)",
+        dit_path="checkpoints/TurboWan2.1-T2V-1.3B-480P.pth",
+        # 自动推断 quant_linear=False（文件名不含"quant"）
+    ),
+    "Wan2.1 T2V 14B 720p (quant, 5090 recommended)": create_preset(
         name="Wan2.1 T2V 14B 720p (quant, 5090 recommended)",
         dit_path="checkpoints/TurboWan2.1-T2V-14B-720P-quant.pth",
-        vae_path="checkpoints/Wan2.1_VAE.pth",
-        text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
-        model="Wan2.1-14B",
-        resolution="720p",
-        aspect_ratio="16:9",
-        quant_linear=True,      # quant checkpoint 需要 --quant_linear（官方建议）
-        default_norm=False,
+        # 自动推断：model=Wan2.1-14B, resolution=720p, quant_linear=True
     ),
-
-    "Wan2.1 T2V 14B 720p (fp16, >40GB GPU)": EngineConfig(
+    "Wan2.1 T2V 14B 720p (fp16, >40GB GPU)": create_preset(
         name="Wan2.1 T2V 14B 720p (fp16, >40GB GPU)",
         dit_path="checkpoints/TurboWan2.1-T2V-14B-720P.pth",
-        vae_path="checkpoints/Wan2.1_VAE.pth",
-        text_encoder_path="checkpoints/models_t5_umt5-xxl-enc-bf16.pth",
-        model="Wan2.1-14B",
-        resolution="720p",
-        aspect_ratio="16:9",
-        quant_linear=False,     # 非 quant checkpoint 不要开 quant_linear
-        default_norm=False,
+        # 自动推断：model=Wan2.1-14B, resolution=720p, quant_linear=False
+    ),
+    "Wan2.1 T2V 14B 480p (quant, 5090 recommended)": create_preset(
+        name="Wan2.1 T2V 14B 480p (quant, 5090 recommended)",
+        dit_path="checkpoints/TurboWan2.1-T2V-14B-480P-quant.pth",
+        # 自动推断所有参数
+    ),
+    "Wan2.1 T2V 14B 480p (fp16, >40GB GPU)": create_preset(
+        name="Wan2.1 T2V 14B 480p (fp16, >40GB GPU)",
+        dit_path="checkpoints/TurboWan2.1-T2V-14B-480P.pth",
+        # 自动推断所有参数
     ),
 
+    # Wan2.2 I2V 模型
+    "Wan2.2 I2V A14B 720p (quant)": create_preset(
+        name="Wan2.2 I2V A14B 720p (quant)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-720P-quant.pth",
+        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=True
+    ),
+    "Wan2.2 I2V A14B 720p (fp16)": create_preset(
+        name="Wan2.2 I2V A14B 720p (fp16)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-720P.pth",
+        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=False
+    ),
 }
 
 

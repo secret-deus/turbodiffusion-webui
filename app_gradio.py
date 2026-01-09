@@ -72,19 +72,47 @@ def validate_paths(preset_name):
 
 
 def refresh_presets(current_generate_choice, current_models_choice):
+    """重新扫描 checkpoints 并刷新预设列表"""
     # Rescan checkpoints so newly mounted/copied weights show up without restart.
     refresh_discovered_presets()
     names = discoverable_preset_names()
     selected_generate = current_generate_choice if current_generate_choice in names else names[0]
     selected_models = current_models_choice if current_models_choice in names else names[0]
+
     msg = (
-        f"Discovered {len(names)} preset(s) from MODEL_PATHS="
-        f"{os.environ.get('MODEL_PATHS', DEFAULT_MODEL_ROOT)}"
+        f"✅ 发现 {len(names)} 个预设配置\n"
+        f"📂 扫描路径: {os.environ.get('MODEL_PATHS', DEFAULT_MODEL_ROOT)}"
     )
+
     return (
         gr.update(choices=names, value=selected_generate),
         gr.update(choices=names, value=selected_models),
         gr.update(value=msg, visible=True),
+    )
+
+
+def refresh_presets_with_feedback(current_generate_choice, current_models_choice):
+    """带有加载反馈的预设刷新函数"""
+    import time
+
+    # 开始刷新提示
+    yield (
+        gr.update(),  # preset dropdown
+        gr.update(),  # preset_m dropdown
+        gr.update(value="🔄 正在扫描模型文件...", visible=True),  # message
+        gr.update(interactive=False),  # 禁用按钮
+    )
+
+    # 执行实际刷新
+    time.sleep(0.3)  # 短暂延迟让用户看到加载状态
+    result = refresh_presets(current_generate_choice, current_models_choice)
+
+    # 完成刷新，恢复按钮状态
+    yield (
+        result[0],  # preset dropdown
+        result[1],  # preset_m dropdown
+        result[2],  # message
+        gr.update(interactive=True),  # 恢复按钮
     )
 
 
@@ -218,12 +246,13 @@ def create_demo():
                             label="Model Preset"
                         )
                         preset_info = gr.Markdown(preset_details(DEFAULT_PRESET))
-                        discover_btn_generate = gr.Button("Discover models", variant="secondary")
+                        discover_btn_generate = gr.Button("🔄 Discover models", variant="secondary")
+                        discover_msg_generate = gr.Markdown(visible=False)
                         prompt = gr.Textbox(lines=3, label="Prompt", value="a cinematic shot of a tiger walking in snow")
 
                         with gr.Accordion("Basic", open=True):
                             num_steps = gr.Dropdown([1,2,3,4], value=4, label="Steps")
-                            num_frames = gr.Slider(17, 81, value=81, step=1, label="Frames")
+                            num_frames = gr.Slider(17, 500, value=81, step=1, label="Frames")
                             num_samples = gr.Slider(1, 4, value=1, step=1, label="Num Samples")
 
                             seed_mode = gr.Radio(["fixed", "random"], value="fixed", label="Seed Mode")
@@ -322,7 +351,8 @@ def create_demo():
                     with gr.Column(scale=3):
                         preset_m = gr.Dropdown(choices=PRESET_CHOICES, value=DEFAULT_PRESET, label="Preset")
                         preset_info_m = gr.Markdown(preset_details(DEFAULT_PRESET))
-                        discover_btn_models = gr.Button("Refresh model list", variant="secondary")
+                        discover_btn_models = gr.Button("🔄 Refresh model list", variant="secondary")
+                        discover_msg_models = gr.Markdown(visible=False)
                         validate_btn = gr.Button("Validate Checkpoints")
                         validate_out = gr.Textbox(label="Checkpoint Status", lines=8, interactive=False)
 
@@ -335,7 +365,6 @@ def create_demo():
                         gpu_json = gr.JSON(label="GPU Info")
 
                         refresh_btn = gr.Button("Refresh System Info")
-                        discover_msg = gr.Markdown(visible=False)
 
                 validate_btn.click(validate_paths, inputs=[preset_m], outputs=[validate_out])
                 preset_m.change(lambda name: preset_details(name), inputs=[preset_m], outputs=[preset_info_m])
@@ -345,14 +374,14 @@ def create_demo():
                 unload_btn.click(unload_model, outputs=[status_badge, load_btn, unload_btn], concurrency_id="gpu", concurrency_limit=1)
 
                 discover_btn_models.click(
-                    refresh_presets,
+                    refresh_presets_with_feedback,
                     inputs=[preset, preset_m],
-                    outputs=[preset, preset_m, discover_msg],
+                    outputs=[preset, preset_m, discover_msg_models, discover_btn_models],
                 )
                 discover_btn_generate.click(
-                    refresh_presets,
+                    refresh_presets_with_feedback,
                     inputs=[preset, preset_m],
-                    outputs=[preset, preset_m, discover_msg],
+                    outputs=[preset, preset_m, discover_msg_generate, discover_btn_generate],
                 )
             # ===================== System Tab =====================
             with gr.Tab("System"):
