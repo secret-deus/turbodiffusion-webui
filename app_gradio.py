@@ -80,8 +80,8 @@ def refresh_presets(current_generate_choice, current_models_choice):
     selected_models = current_models_choice if current_models_choice in names else names[0]
 
     msg = (
-        f"✅ 发现 {len(names)} 个预设配置\n"
-        f"📂 扫描路径: {os.environ.get('MODEL_PATHS', DEFAULT_MODEL_ROOT)}"
+        f"✅ discoverd {len(names)} presetconfig\n"
+        f"📂 scanning path: {os.environ.get('MODEL_PATHS', DEFAULT_MODEL_ROOT)}"
     )
 
     return (
