@@ -99,7 +99,7 @@ def refresh_presets_with_feedback(current_generate_choice, current_models_choice
     yield (
         gr.update(),  # preset dropdown
         gr.update(),  # preset_m dropdown
-        gr.update(value="🔄 正在扫描模型文件...", visible=True),  # message
+        gr.update(value="🔄 scanning models...", visible=True),  # message
         gr.update(interactive=False),  # 禁用按钮
     )
 
