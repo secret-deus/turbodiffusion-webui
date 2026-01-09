@@ -102,7 +102,7 @@ def test_generate_video_surfaces_inference_error(monkeypatch, tmp_path):
     preset_name = app_gradio.PRESET_CHOICES[0]
     video_path, status, logs, meta = app_gradio.generate_video(preset_name, **DEFAULT_ARGS)
 
-    assert video_path == ""
+    assert video_path is None
     assert meta == {}
     assert status.startswith("❌ Error during inference")
     assert "Inference failed" in logs
@@ -120,7 +120,7 @@ def test_generate_video_requires_init_image_for_i2v(monkeypatch, tmp_path):
 
     video_path, status, logs, meta = app_gradio.generate_video(preset_name, init_image=None, **DEFAULT_ARGS)
 
-    assert video_path == ""
+    assert video_path is None
     assert meta == {}
     assert "no init image" in status.lower()
     assert "no init image" in logs.lower()

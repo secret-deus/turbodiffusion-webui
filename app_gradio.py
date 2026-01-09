@@ -142,7 +142,7 @@ def generate_video(
         if is_i2v and init_image is None:
             status = "❌ I2V preset selected, but no init image provided."
             logs.append(status)
-            return "", status, "\n".join(logs[-200:]), {}
+            return None, status, "\n".join(logs[-200:]), {}
 
         # ---------- pre-check ----------
         if not MANAGER.is_loaded() or MANAGER.cfg.name != preset_name:
@@ -200,7 +200,7 @@ def generate_video(
             err = f"❌ invalid output path: {out_path}"
             logs.append(err)
             status = err
-            return "", status, "\n".join(logs[-200:]), {}
+            return None, status, "\n".join(logs[-200:]), {}
 
         t1 = time.time()
 
@@ -237,7 +237,7 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        return "", status, log_text, {}
+        return None, status, log_text, {}
 
 
 def create_demo():
