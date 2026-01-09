@@ -36,6 +36,19 @@ def test_infer_from_checkpoint_parses_filename_tokens(tmp_path):
     assert "model=Wan2.1-1.3B" in info
 
 
+def test_infer_from_checkpoint_parses_wan22_i2v_tokens(tmp_path):
+    ckpt = tmp_path / "TurboWan2.2-I2V-A14B-high-720P-quant.pth"
+    ckpt.touch()
+
+    fields, info = infer_from_checkpoint(ckpt)
+
+    assert fields["quant_linear"] is True
+    assert fields["resolution"] == "720p"
+    assert fields["aspect_ratio"] == "16:9"
+    assert fields["model"] == "Wan2.2-A14B"
+    assert "model=Wan2.2-A14B" in info
+
+
 def test_infer_from_checkpoint_applies_sidecar_overrides(tmp_path):
     ckpt = tmp_path / "TurboWan2.1-T2V-14B-720P-quant.pth"
     ckpt.touch()

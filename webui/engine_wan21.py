@@ -167,6 +167,8 @@ class TurboWanT2VEngine:
         num_frames: int = 81,
         seed: int = 0,
         num_samples: int = 1,
+        init_image: Optional[object] = None,
+        i2v_strength: float = 1.0,
         resolution: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
         sigma_max: Optional[float] = None,
@@ -267,6 +269,43 @@ class TurboWanT2VEngine:
         generator = torch.Generator(device=tensor_kwargs["device"])
         generator.manual_seed(seed)
 
+        init_latent = None
+        init_latent_noise = None
+        if init_image is not None:
+            if log_cb:
+                log_cb(f"[Engine] I2V enabled: strength={i2v_strength}")
+            init_latent = self._encode_init_image(
+                init_image=init_image,
+                width=w,
+                height=h,
+                device=tensor_kwargs["device"],
+                log_cb=log_cb,
+            ).to(dtype=torch.float64)
+            if init_latent.ndim != 5:
+                raise ValueError(f"init_latent must be 5D (B,C,T,H,W), got shape={tuple(init_latent.shape)}")
+
+            # repeat condition to match num_samples
+            if init_latent.size(0) == 1 and num_samples > 1:
+                init_latent = init_latent.repeat(num_samples, 1, 1, 1, 1)
+            if init_latent.size(0) != num_samples:
+                raise ValueError(
+                    f"init_latent batch={init_latent.size(0)} does not match num_samples={num_samples}"
+                )
+
+            # deterministic per-seed noise for conditioning (inpainting-style)
+            cond_gen = torch.Generator(device=tensor_kwargs["device"])
+            cond_gen.manual_seed(seed + 1_000_003)
+            init_latent_noise = torch.randn(
+                init_latent.size(0),
+                init_latent.size(1),
+                init_latent.size(2),
+                init_latent.size(3),
+                init_latent.size(4),
+                dtype=torch.float64,
+                device=tensor_kwargs["device"],
+                generator=cond_gen,
+            )
+
         init_noise = torch.randn(
             num_samples,
             *state_shape,
@@ -298,6 +337,21 @@ class TurboWanT2VEngine:
             progress_cb("sampling", 0, total_steps)
 
         x = init_noise.to(torch.float64) * t_steps[0]
+
+        if init_latent is not None:
+            # Apply first-frame conditioning in latent space (masking / inpainting trick).
+            # For rectified flow, a common approximation is x_t = (1 - t) * x0 + t * eps.
+            def _apply_first_frame_condition(x_B_C_T_H_W: torch.Tensor, t: torch.Tensor) -> None:
+                t_scalar = float(t.item()) if isinstance(t, torch.Tensor) else float(t)
+                strength = float(i2v_strength) if i2v_strength is not None else 1.0
+                strength = max(0.0, min(1.0, strength))
+                t_eff = max(0.0, min(1.0, t_scalar * strength))
+
+                x_cond = (1.0 - t_eff) * init_latent + t_eff * init_latent_noise
+                # only constrain the first latent frame
+                x_B_C_T_H_W[:, :, 0:1, :, :] = x_cond[:, :, 0:1, :, :]
+
+            _apply_first_frame_condition(x, t_steps[0])
         ones = torch.ones(x.size(0), 1, device=x.device, dtype=x.dtype)
 
         # move net to GPU
@@ -320,6 +374,9 @@ class TurboWanT2VEngine:
                 device=tensor_kwargs["device"],
                 generator=generator,
             )
+
+            if init_latent is not None:
+                _apply_first_frame_condition(x, t_next)
 
             if progress_cb:
                 progress_cb("sampling", i + 1, total_steps)
@@ -376,3 +433,116 @@ class TurboWanT2VEngine:
         if return_tensor:
             return to_show
         return to_show.numpy()
+
+    def _encode_init_image(
+        self,
+        init_image: object,
+        width: int,
+        height: int,
+        device: str,
+        log_cb: LogCB = None,
+    ) -> torch.Tensor:
+        """Encode an input image into the Wan VAE latent space.
+
+        The TurboDiffusion repo may expose different encoder helpers depending
+        on version. We try a small set of common method names on the VAE
+        interface and normalize the output to a 5D latent: (B,C,T,H,W).
+        """
+
+        try:
+            import numpy as np
+        except Exception as exc:  # pragma: no cover - numpy is expected in runtime
+            raise RuntimeError("numpy is required for init_image preprocessing") from exc
+
+        try:
+            from PIL import Image
+        except Exception as exc:  # pragma: no cover - pillow should ship with gradio
+            raise RuntimeError("Pillow is required for init_image preprocessing") from exc
+
+        img = init_image
+        if isinstance(img, (str, Path)):
+            img = Image.open(img)
+
+        if isinstance(img, Image.Image):
+            pil = img.convert("RGB")
+        elif isinstance(img, np.ndarray):
+            arr = img
+            if arr.ndim == 2:
+                arr = np.stack([arr, arr, arr], axis=-1)
+            if arr.ndim != 3:
+                raise ValueError(f"Unsupported init_image ndarray shape: {arr.shape}")
+            if arr.shape[2] == 4:
+                arr = arr[:, :, :3]
+            if arr.dtype != np.uint8:
+                # Gradio may return float images in [0,1]
+                arr_max = float(arr.max()) if arr.size else 0.0
+                if arr_max <= 1.0:
+                    arr = (arr * 255.0).clip(0, 255).astype(np.uint8)
+                else:
+                    arr = arr.clip(0, 255).astype(np.uint8)
+            pil = Image.fromarray(arr, mode="RGB")
+        else:
+            raise TypeError(f"Unsupported init_image type: {type(init_image)!r}")
+
+        # center-crop to target aspect ratio, then resize
+        target_ratio = float(width) / float(height)
+        cur_w, cur_h = pil.size
+        cur_ratio = float(cur_w) / float(cur_h) if cur_h else target_ratio
+        if cur_ratio > target_ratio:
+            # too wide
+            new_w = int(round(cur_h * target_ratio))
+            left = max(0, (cur_w - new_w) // 2)
+            pil = pil.crop((left, 0, left + new_w, cur_h))
+        elif cur_ratio < target_ratio:
+            # too tall
+            new_h = int(round(cur_w / target_ratio)) if target_ratio else cur_h
+            top = max(0, (cur_h - new_h) // 2)
+            pil = pil.crop((0, top, cur_w, top + new_h))
+
+        pil = pil.resize((int(width), int(height)), resample=Image.LANCZOS)
+        arr = np.asarray(pil).astype(np.float32) / 255.0
+        # (H,W,3) -> (1,3,H,W) in [-1,1]
+        img_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+        img_t = img_t * 2.0 - 1.0
+        img_t = img_t.to(device=device, dtype=torch.float32)
+
+        if log_cb:
+            log_cb(f"[Engine] Init image prepared: shape={tuple(img_t.shape)} target={width}x{height}")
+
+        latent = None
+        for method_name in ("encode", "encode_image", "encode_images", "encode_video"):
+            fn = getattr(self.tokenizer, method_name, None)
+            if fn is None:
+                continue
+            try:
+                latent = fn(img_t)
+            except TypeError:
+                # Some versions may require keyword args, but we keep it minimal.
+                continue
+            if latent is not None:
+                break
+
+        if latent is None:
+            raise AttributeError(
+                "VAE interface does not expose an image encoder; tried: encode/encode_image/encode_images/encode_video"
+            )
+
+        if isinstance(latent, (tuple, list)) and latent:
+            latent = latent[0]
+
+        if not isinstance(latent, torch.Tensor):
+            raise TypeError(f"VAE encode returned unsupported type: {type(latent)!r}")
+
+        # normalize latent shape to (B,C,T,H,W)
+        if latent.ndim == 3:
+            latent = latent.unsqueeze(0).unsqueeze(2)
+        elif latent.ndim == 4:
+            latent = latent.unsqueeze(2)
+        elif latent.ndim == 5:
+            pass
+        else:
+            raise ValueError(f"Unexpected latent ndim={latent.ndim} shape={tuple(latent.shape)}")
+
+        # keep only first latent frame (I2V first-frame conditioning)
+        latent = latent[:, :, 0:1, :, :]
+        return latent.to(device=device)

@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +106,81 @@ def test_generate_video_surfaces_inference_error(monkeypatch, tmp_path):
     assert meta == {}
     assert status.startswith("❌ Error during inference")
     assert "Inference failed" in logs
+
+
+def test_generate_video_requires_init_image_for_i2v(monkeypatch, tmp_path):
+    sys.modules.pop("app_gradio", None)
+    app_gradio = importlib.import_module("app_gradio")
+
+    monkeypatch.setattr(app_gradio, "OUT", tmp_path)
+
+    i2v_presets = [name for name in app_gradio.PRESET_CHOICES if "I2V" in name.upper()]
+    assert i2v_presets, "Expected at least one I2V preset in PRESET_CHOICES"
+    preset_name = i2v_presets[0]
+
+    video_path, status, logs, meta = app_gradio.generate_video(preset_name, init_image=None, **DEFAULT_ARGS)
+
+    assert video_path == ""
+    assert meta == {}
+    assert "no init image" in status.lower()
+    assert "no init image" in logs.lower()
+
+
+def test_generate_video_passes_init_image_for_i2v(monkeypatch, tmp_path):
+    import numpy as np
+
+    class DummyEngineOk:
+        def __init__(self):
+            self.keep_dit_on_gpu = True
+            self.keep_text_encoder = False
+            self.last_kwargs = None
+
+        def generate(self, **kwargs):
+            self.last_kwargs = dict(kwargs)
+            save_path = Path(kwargs["save_path"])
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            save_path.touch()
+            return str(save_path)
+
+    class DummyManagerOk:
+        def __init__(self, engine):
+            self.engine = None
+            self.cfg = None
+            self._engine = engine
+
+        def is_loaded(self) -> bool:
+            return False
+
+        def load(self, cfg):
+            self.cfg = cfg
+            self.engine = self._engine
+            return self.engine
+
+    sys.modules.pop("app_gradio", None)
+    app_gradio = importlib.import_module("app_gradio")
+
+    engine = DummyEngineOk()
+    monkeypatch.setattr(app_gradio, "MANAGER", DummyManagerOk(engine))
+    monkeypatch.setattr(app_gradio, "OUT", tmp_path)
+
+    i2v_presets = [name for name in app_gradio.PRESET_CHOICES if "I2V" in name.upper()]
+    assert i2v_presets, "Expected at least one I2V preset in PRESET_CHOICES"
+    preset_name = i2v_presets[0]
+
+    init_image = np.zeros((64, 64, 3), dtype=np.uint8)
+    video_path, status, logs, meta = app_gradio.generate_video(
+        preset_name,
+        init_image=init_image,
+        i2v_strength=0.42,
+        **DEFAULT_ARGS,
+    )
+
+    assert engine.last_kwargs is not None
+    assert engine.last_kwargs["init_image"] is init_image
+    assert engine.last_kwargs["i2v_strength"] == 0.42
+
+    assert video_path
+    assert Path(video_path).exists()
+    assert "i2v_" in Path(video_path).name
+    assert status.startswith("✅ Done")
+    assert meta.get("mode") == "i2v"

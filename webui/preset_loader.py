@@ -29,6 +29,8 @@ def _find_required_file(filename: str, preferred_dir: Path, search_dirs: Iterabl
 
 
 def _derive_model(stem: str) -> str:
+    if "a14b" in stem.lower():
+        return "Wan2.2-A14B"
     if "14b" in stem.lower():
         return "Wan2.1-14B"
     if "1.3b" in stem.lower():

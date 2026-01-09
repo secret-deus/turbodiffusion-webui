@@ -168,15 +168,31 @@ PRESETS = {
         # 自动推断所有参数
     ),
 
-    # Wan2.2 I2V 模型
-    "Wan2.2 I2V A14B 720p (quant)": create_preset(
-        name="Wan2.2 I2V A14B 720p (quant)",
-        dit_path="checkpoints/TurboWan2.2-I2V-A14B-720P-quant.pth",
+    # Wan2.2 I2V 模型（A14B 720p）
+    #
+    # Upstream checkpoint naming follows:
+    # - TurboWan2.2-I2V-A14B-{low,high}-720P[-quant].pth
+    #
+    # We provide curated names for each variant so the WebUI list stays stable
+    # even when auto-discovery is disabled (e.g. missing deps or missing paths).
+    "Wan2.2 I2V A14B 720p (low, quant)": create_preset(
+        name="Wan2.2 I2V A14B 720p (low, quant)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-low-720P-quant.pth",
         # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=True
     ),
-    "Wan2.2 I2V A14B 720p (fp16)": create_preset(
-        name="Wan2.2 I2V A14B 720p (fp16)",
-        dit_path="checkpoints/TurboWan2.2-I2V-A14B-720P.pth",
+    "Wan2.2 I2V A14B 720p (low, fp16)": create_preset(
+        name="Wan2.2 I2V A14B 720p (low, fp16)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-low-720P.pth",
+        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=False
+    ),
+    "Wan2.2 I2V A14B 720p (high, quant)": create_preset(
+        name="Wan2.2 I2V A14B 720p (high, quant)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-high-720P-quant.pth",
+        # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=True
+    ),
+    "Wan2.2 I2V A14B 720p (high, fp16)": create_preset(
+        name="Wan2.2 I2V A14B 720p (high, fp16)",
+        dit_path="checkpoints/TurboWan2.2-I2V-A14B-high-720P.pth",
         # 自动推断：model=Wan2.2-A14B, resolution=720p, quant_linear=False
     ),
 }

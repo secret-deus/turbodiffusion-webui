@@ -131,13 +131,22 @@ def generate_video(
     keep_dit_on_gpu,
     keep_text_encoder,
     default_norm,
+    init_image=None,
+    i2v_strength: float = 1.0,
 ):
     logs = []
     try:
+        cfg = get_preset(preset_name)
+        is_i2v = "I2V" in (cfg.name or "").upper() or "I2V" in Path(cfg.dit_path).name.upper()
+
+        if is_i2v and init_image is None:
+            status = "❌ I2V preset selected, but no init image provided."
+            logs.append(status)
+            return "", status, "\n".join(logs[-200:]), {}
+
         # ---------- pre-check ----------
         if not MANAGER.is_loaded() or MANAGER.cfg.name != preset_name:
             # auto load if not loaded or preset mismatch
-            cfg = get_preset(preset_name)
             MANAGER.load(cfg)
 
         eng = MANAGER.engine
@@ -164,7 +173,8 @@ def generate_video(
 
         # file naming
         ts = time.strftime("%Y%m%d-%H%M%S")
-        save_path = OUT / f"t2v_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
+        mode = "i2v" if is_i2v else "t2v"
+        save_path = OUT / f"{mode}_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
 
         # run inference
         t0 = time.time()
@@ -178,6 +188,8 @@ def generate_video(
             sla_topk=float(sla_topk),
             sigma_max=float(sigma_max),
             default_norm=bool(default_norm),
+            init_image=init_image,
+            i2v_strength=float(i2v_strength) if i2v_strength is not None else 1.0,
             save_path=str(save_path),
             fps=int(fps),
             progress_cb=progress_cb,
@@ -196,6 +208,7 @@ def generate_video(
         meta = {
             "time": ts,
             "preset": preset_name,
+            "mode": mode,
             "seed": seed,
             "steps": int(num_steps),
             "frames": int(num_frames),
@@ -204,6 +217,8 @@ def generate_video(
             "path": str(out_path),
             "sec": round(t1 - t0, 2),
         }
+        if is_i2v:
+            meta["i2v_strength"] = float(i2v_strength) if i2v_strength is not None else 1.0
 
         # outputs:
         # - video player expects file path
@@ -222,11 +237,11 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        return None, status, log_text, {}
+        return "", status, log_text, {}
 
 
 def create_demo():
-    with gr.Blocks(title="TurboDiffusion WebUI (Wan2.1 T2V)") as demo:
+    with gr.Blocks(title="TurboDiffusion WebUI (Wan2.x T2V / I2V)") as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
                     "✅ Model switch + SageSLA check  →  ✅ Progress & Logs  →  ✅ History & Download  →  ✅ Load/Unload & GPU stats"
 )
@@ -240,6 +255,7 @@ def create_demo():
             with gr.Tab("Generate"):
                 with gr.Row():
                     with gr.Column(scale=4):
+                        default_is_i2v = "I2V" in DEFAULT_PRESET.upper()
                         preset = gr.Dropdown(
                             choices=PRESET_CHOICES,
                             value=DEFAULT_PRESET,
@@ -249,6 +265,11 @@ def create_demo():
                         discover_btn_generate = gr.Button("🔄 Discover models", variant="secondary")
                         discover_msg_generate = gr.Markdown(visible=False)
                         prompt = gr.Textbox(lines=3, label="Prompt", value="a cinematic shot of a tiger walking in snow")
+                        init_image = gr.Image(
+                            label="Init Image (I2V)",
+                            type="numpy",
+                            visible=default_is_i2v,
+                        )
 
                         with gr.Accordion("Basic", open=True):
                             num_steps = gr.Dropdown([1,2,3,4], value=4, label="Steps")
@@ -264,6 +285,14 @@ def create_demo():
                             sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k (sla/sagesla)")
                             sigma_max = gr.Slider(10, 120, value=80, step=1, label="sigma_max")
                             default_norm = gr.Checkbox(value=False, label="default_norm (faster norm)")
+                            i2v_strength = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=1.0,
+                                step=0.01,
+                                label="I2V strength (0=keep image, 1=free)",
+                                visible=default_is_i2v,
+                            )
 
                         with gr.Accordion("Output", open=False):
                             fps = gr.Slider(8, 30, value=16, step=1, label="FPS")
@@ -328,16 +357,22 @@ def create_demo():
                         attention_type, sla_topk, sigma_max,
                         fps,
                         keep_dit_on_gpu, keep_text_encoder,
-                        default_norm
+                        default_norm,
+                        init_image,
+                        i2v_strength,
                     ],
                     outputs=[out_video, status_md, log_box, last_meta_state],
                     concurrency_id="gpu",
                     concurrency_limit=1,
                 )
 
-                preset.change(
-                    lambda name: preset_details(name), inputs=[preset], outputs=[preset_info]
-                )
+                def _on_preset_change(name: str):
+                    is_i2v = "I2V" in (name or "").upper()
+                    img_update = gr.update(visible=True) if is_i2v else gr.update(visible=False, value=None)
+                    strength_update = gr.update(visible=is_i2v)
+                    return preset_details(name), img_update, strength_update
+
+                preset.change(_on_preset_change, inputs=[preset], outputs=[preset_info, init_image, i2v_strength])
 
                 run_evt.then(
                     fn=_after_gen,
