@@ -149,10 +149,13 @@ def generate_video(
             logs.append(status)
             return None, status, "\n".join(logs[-200:]), {}
 
-        # ---------- pre-check ----------
-        if not MANAGER.is_loaded() or MANAGER.cfg.name != preset_name:
-            # auto load if not loaded or preset mismatch
-            MANAGER.load(cfg)
+        # ---------- load (auto reload if load-time options changed) ----------
+        MANAGER.load(
+            cfg,
+            attention_type=attention_type,
+            sla_topk=float(sla_topk),
+            default_norm=bool(default_norm),
+        )
 
         eng = MANAGER.engine
         if hasattr(eng, "keep_dit_on_gpu"):

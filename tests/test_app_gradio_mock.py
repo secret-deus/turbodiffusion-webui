@@ -19,7 +19,7 @@ class DummyManager:
     def is_loaded(self) -> bool:
         return self.engine is not None
 
-    def load(self, cfg):
+    def load(self, cfg, **_kwargs):
         # simulate successful load without touching real checkpoints
         self.engine = DummyEngine()
         self.cfg = cfg
@@ -73,7 +73,7 @@ def gradio_stub(monkeypatch):
         def is_loaded(self):
             return False
 
-        def load(self, cfg):
+        def load(self, cfg, **_kwargs):
             self.cfg = cfg
             return None
 
@@ -151,7 +151,7 @@ def test_generate_video_passes_init_image_for_i2v(monkeypatch, tmp_path):
         def is_loaded(self) -> bool:
             return False
 
-        def load(self, cfg):
+        def load(self, cfg, **_kwargs):
             self.cfg = cfg
             self.engine = self._engine
             return self.engine
