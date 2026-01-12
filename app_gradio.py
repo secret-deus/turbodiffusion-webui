@@ -326,6 +326,7 @@ def generate_video(
     result = {"video": None, "status": "", "log_text": "", "meta": {}}
     done = threading.Event()
     lock = threading.Lock()
+    start_t = time.time()
 
     def log_cb(msg):
         with lock:
@@ -389,12 +390,13 @@ def generate_video(
             snapshot = (stage, cur, total, len(logs))
         progress_pct = _progress_percent(stage, cur, total)
         stage_md = _format_stage(stage, cur, total)
+        elapsed = time.time() - start_t
         if stage and total and total > 1:
-            status = f"Running: {stage} ({cur}/{total})"
+            status = f"Running: {stage} ({cur}/{total}) | {elapsed:.1f}s"
         elif stage:
-            status = f"Running: {stage}"
+            status = f"Running: {stage} | {elapsed:.1f}s"
         else:
-            status = "Running..."
+            status = f"Running... | {elapsed:.1f}s"
         if snapshot != last_snapshot:
             yield (
                 status,
@@ -414,8 +416,14 @@ def generate_video(
     else:
         final_stage = "**Stage:** error"
         final_progress = 0
+    total_time = time.time() - start_t
+    final_status = result["status"]
+    if final_status:
+        final_status = f"{final_status} | took {total_time:.1f}s"
+    else:
+        final_status = f"Finished | took {total_time:.1f}s"
     yield (
-        result["status"],
+        final_status,
         final_log_text,
         meta,
         final_stage,
@@ -541,6 +549,7 @@ def create_demo():
                             "Upload an image to enable I2V.",
                             visible=default_is_i2v,
                         )
+                        run_btn = gr.Button("Generate", variant="primary")
 
                         with gr.Accordion("Basic", open=True):
                             num_steps = gr.Dropdown([1,2,3,4], value=4, label="Steps")
@@ -591,8 +600,6 @@ def create_demo():
                         with gr.Accordion("Advanced", open=False):
                             keep_dit_on_gpu = gr.Checkbox(value=True, label="Keep DiT on GPU (recommended)")
                             keep_text_encoder = gr.Checkbox(value=False, label="Keep UMT5 encoder (if you modify umt5 cache)")
-
-                        run_btn = gr.Button("Generate", variant="primary")
 
                     with gr.Column(scale=5):
                         stage_md = gr.Markdown("**Stage:** idle")
