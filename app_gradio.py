@@ -435,6 +435,13 @@ def create_demo():
           box-shadow: none !important;
           outline: none !important;
         }
+        .gradio-container .block,
+        .gradio-container .block * {
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
+          box-shadow: none !important;
+          outline: none !important;
+        }
         .gradio-container .block:focus-within,
         .gradio-container .block:has(input:focus),
         .gradio-container .block:has(textarea:focus),
@@ -465,6 +472,16 @@ def create_demo():
           border-color: var(--neutral-200, #e5e7eb) !important;
           box-shadow: none !important;
           outline: none !important;
+        }
+        .gradio-container .block.output,
+        .gradio-container .block.output .wrap,
+        .gradio-container .block.output textarea,
+        .gradio-container .block.output input {
+          border-color: var(--neutral-200, #e5e7eb) !important;
+          box-shadow: none !important;
+          outline: none !important;
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
         }
         """,
     ) as demo:
