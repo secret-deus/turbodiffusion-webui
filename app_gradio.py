@@ -397,7 +397,6 @@ def generate_video(
             status = "Running..."
         if snapshot != last_snapshot:
             yield (
-                gr.update(),  # out_video
                 status,
                 log_text,
                 None,
@@ -416,7 +415,6 @@ def generate_video(
         final_stage = "**Stage:** error"
         final_progress = 0
     yield (
-        result["video"],
         result["status"],
         final_log_text,
         meta,
@@ -429,13 +427,21 @@ def create_demo():
     with gr.Blocks(
         title="TurboDiffusion WebUI (Wan2.x T2V / I2V)",
         css="""
-        .gradio-container .loading {
-          border-color: inherit !important;
+        .gradio-container .loading,
+        .gradio-container .loading *,
+        .gradio-container .block.loading,
+        .gradio-container .block:has(.loading) {
+          border-color: transparent !important;
           box-shadow: none !important;
           outline: none !important;
         }
-        .gradio-container .loading * {
+        .gradio-container [class*="ring-orange"],
+        .gradio-container [class*="border-orange"] {
+          border-color: transparent !important;
           box-shadow: none !important;
+          outline: none !important;
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
         }
         """,
     ) as demo:
@@ -551,12 +557,13 @@ def create_demo():
                     ] for x in history]
                     return history, rows
 
-                def _after_gen(video_path, status, logs, meta, history):
+                def _after_gen(status, logs, meta, history):
                     # update progress and stage
                     if meta:
                         stage = "**Stage:** done"
                         progress_pct = 100
                         history, rows = _update_history(meta, history)
+                        video_path = meta.get("path")
                     else:
                         stage = "**Stage:** error"
                         progress_pct = 0
@@ -564,10 +571,12 @@ def create_demo():
                             x["time"], x["preset"], x["seed"], x["steps"], x["frames"],
                             x["attn"], x["topk"], x["sec"], x["path"]
                         ] for x in history]
+                        video_path = None
                     return (
                         stage, progress_pct,
                         status, logs,
-                        history, rows
+                        history, rows,
+                        video_path,
                     )
 
                 # main click
@@ -585,7 +594,7 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                     ],
-                    outputs=[out_video, status_md, log_box, last_meta_state, stage_md, prog],
+                    outputs=[status_md, log_box, last_meta_state, stage_md, prog],
                     concurrency_id="gpu",
                     concurrency_limit=1,
                 )
@@ -627,8 +636,8 @@ def create_demo():
 
                 run_evt.then(
                     fn=_after_gen,
-                    inputs=[out_video, status_md, log_box, last_meta_state, history_state],
-                    outputs=[stage_md, prog, status_md, log_box, history_state, history_df],
+                    inputs=[status_md, log_box, last_meta_state, history_state],
+                    outputs=[stage_md, prog, status_md, log_box, history_state, history_df, out_video],
                 )
 
             # ===================== Models Tab =====================
