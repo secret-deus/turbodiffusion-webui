@@ -296,6 +296,7 @@ def create_demo():
                         init_image = gr.Image(
                             label="Init Image (I2V)",
                             type="numpy",
+                            sources=["upload", "clipboard"],
                             visible=default_is_i2v,
                         )
 
