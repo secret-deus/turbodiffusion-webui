@@ -387,16 +387,17 @@ def generate_video(
             cur = stage_state["cur"]
             total = stage_state["total"]
             log_text = "\n".join(logs[-200:])
-            snapshot = (stage, cur, total, len(logs))
+        elapsed = time.time() - start_t
+        timer_html = _timer_html(elapsed, finished=False)
+        snapshot = (stage, cur, total, len(logs), int(elapsed * 10))
         progress_pct = _progress_percent(stage, cur, total)
         stage_md = _format_stage(stage, cur, total)
-        elapsed = time.time() - start_t
         if stage and total and total > 1:
-            status = f"Running: {stage} ({cur}/{total}) | {elapsed:.1f}s"
+            status = f"Running: {stage} ({cur}/{total})"
         elif stage:
-            status = f"Running: {stage} | {elapsed:.1f}s"
+            status = f"Running: {stage}"
         else:
-            status = f"Running... | {elapsed:.1f}s"
+            status = "Running..."
         if snapshot != last_snapshot:
             yield (
                 status,
@@ -404,6 +405,7 @@ def generate_video(
                 None,
                 stage_md,
                 progress_pct,
+                timer_html,
             )
             last_snapshot = snapshot
         time.sleep(0.2)
@@ -417,6 +419,7 @@ def generate_video(
         final_stage = "**Stage:** error"
         final_progress = 0
     total_time = time.time() - start_t
+    final_timer_html = _timer_html(total_time, finished=True)
     final_status = result["status"]
     if final_status:
         final_status = f"{final_status} | took {total_time:.1f}s"
@@ -428,6 +431,7 @@ def generate_video(
         meta,
         final_stage,
         final_progress,
+        final_timer_html,
     )
 
 
@@ -514,6 +518,65 @@ def create_demo():
           --tw-ring-color: transparent !important;
           --tw-ring-shadow: none !important;
         }
+        #output-panel {
+          position: relative;
+        }
+        #video-timer {
+          position: absolute;
+          top: 10px;
+          right: 12px;
+          z-index: 5;
+          pointer-events: none;
+        }
+        #video-timer .timer {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(249, 115, 22, 0.55);
+          color: #f97316;
+          background: rgba(0, 0, 0, 0.55);
+          font-size: 12px;
+          letter-spacing: 0.3px;
+          backdrop-filter: blur(4px);
+          position: relative;
+          overflow: hidden;
+        }
+        #video-timer .timer::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(120deg, transparent, rgba(249, 115, 22, 0.22), transparent);
+          animation: timer-sweep 2.2s linear infinite;
+          opacity: 0.8;
+        }
+        #video-timer .timer.done::after {
+          animation: none;
+          opacity: 0.0;
+        }
+        #video-timer .dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #f97316;
+          box-shadow: 0 0 6px rgba(249, 115, 22, 0.7);
+          animation: timer-pulse 1.2s ease-in-out infinite;
+          flex: 0 0 6px;
+        }
+        #video-timer .timer.done .dot {
+          animation: none;
+          box-shadow: none;
+        }
+        @keyframes timer-sweep {
+          0% { transform: translateX(-120%); }
+          100% { transform: translateX(120%); }
+        }
+        @keyframes timer-pulse {
+          0% { transform: scale(0.9); opacity: 0.7; }
+          50% { transform: scale(1.2); opacity: 1; }
+          100% { transform: scale(0.9); opacity: 0.7; }
+        }
         """,
     ) as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
@@ -560,13 +623,12 @@ def create_demo():
                             seed = gr.Number(value=0, precision=0, label="Seed (fixed mode)")
 
                         with gr.Accordion("Quality & Speed", open=True):
-                            # SageSLA may be disabled if SpargeAttn missing
                             attention_type = gr.Dropdown(
                                 ["sla", "original"],
                                 value=("sla"),
                                 label="Attention Type",
                             )
-                            sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k (sla/sagesla)")
+                            sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k ")
                             sigma_max = gr.Slider(
                                 10,
                                 200,
@@ -606,7 +668,9 @@ def create_demo():
                         prog = gr.Slider(0, 100, value=0, step=1, label="Progress (%)", interactive=False)
                         status_md = gr.Markdown("")
 
-                        out_video = gr.Video(label="Output Video", interactive=False)
+                        with gr.Group(elem_id="output-panel"):
+                            out_video = gr.Video(label="Output Video", interactive=False)
+                            video_timer = gr.HTML("", elem_id="video-timer")
 
                         log_box = gr.Textbox(label="Logs", lines=18, interactive=False)
                         gr.Markdown("### History")
@@ -664,7 +728,7 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                     ],
-                    outputs=[status_md, log_box, last_meta_state, stage_md, prog],
+                    outputs=[status_md, log_box, last_meta_state, stage_md, prog, video_timer],
                     concurrency_id="gpu",
                     concurrency_limit=1,
                 )
@@ -677,7 +741,7 @@ def create_demo():
                     boundary_update = gr.update(visible=is_i2v, value=0.9)
                     ode_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
                     sigma_update = gr.update(value=200 if is_i2v else 80)
-                    attn_update = gr.update(value="sagesla" if is_i2v else "sla")
+                    attn_update = gr.update(value="sla")
                     return (
                         preset_details(name),
                         img_update,
