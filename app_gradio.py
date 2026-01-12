@@ -435,13 +435,25 @@ def create_demo():
           box-shadow: none !important;
           outline: none !important;
         }
-        .gradio-container [class*="ring-orange"],
-        .gradio-container [class*="border-orange"] {
-          border-color: transparent !important;
+        .gradio-container .block:focus-within,
+        .gradio-container .block:has(input:focus),
+        .gradio-container .block:has(textarea:focus),
+        .gradio-container .block:has(.focus) {
+          border-color: var(--neutral-200, #e5e7eb) !important;
           box-shadow: none !important;
           outline: none !important;
+        }
+        .gradio-container [class*="ring-orange"],
+        .gradio-container [class*="ring-primary"],
+        .gradio-container [class*="border-orange"],
+        .gradio-container [class*="border-primary"],
+        .gradio-container [class*="outline-orange"],
+        .gradio-container [class*="outline-primary"] {
+          border-color: var(--neutral-200, #e5e7eb) !important;
+          outline-color: var(--neutral-200, #e5e7eb) !important;
           --tw-ring-color: transparent !important;
           --tw-ring-shadow: none !important;
+          box-shadow: none !important;
         }
         """,
     ) as demo:
