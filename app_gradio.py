@@ -443,6 +443,11 @@ def create_demo():
           --shadow-2: none !important;
           --shadow-3: none !important;
         }
+        #main-tabs {
+          --color-accent: #f97316 !important;
+          --color-accent-soft: rgba(249, 115, 22, 0.25) !important;
+          --color-accent-hover: #fb923c !important;
+        }
         .gradio-container .block,
         .gradio-container .block * {
           --tw-ring-color: transparent !important;
@@ -511,7 +516,7 @@ def create_demo():
         history_state = gr.State([])   # list[dict]
         last_meta_state = gr.State({})
 
-        with gr.Tabs():
+        with gr.Tabs(elem_id="main-tabs"):
             # ===================== Generate Tab =====================
             with gr.Tab("Generate"):
                 with gr.Row():
