@@ -27,7 +27,7 @@ class EngineManager:
         model_name = str(getattr(cfg, "model", "") or "")
         is_wan22 = model_name.startswith("Wan2.2")
 
-        effective_attention_type = attention_type or ("sagesla" if is_wan22 else "sla")
+        effective_attention_type = attention_type or "sla"
         effective_sla_topk = round(float(sla_topk), 4) if sla_topk is not None else 0.1
         effective_default_norm = bool(default_norm) if default_norm is not None else bool(cfg.default_norm)
 
