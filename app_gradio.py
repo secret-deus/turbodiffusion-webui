@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -118,7 +119,39 @@ def refresh_presets_with_feedback(current_generate_choice, current_models_choice
     )
 
 
-def generate_video(
+def _progress_percent(stage: str, cur: int, total: int) -> int:
+    weights = {
+        "embedding": 0.05,
+        "setup": 0.05,
+        "sampling": 0.80,
+        "decode": 0.05,
+        "save": 0.05,
+    }
+    order = ["embedding", "setup", "sampling", "decode", "save"]
+    base = 0.0
+    if stage in order:
+        for item in order:
+            if item == stage:
+                break
+            base += weights[item]
+    stage_weight = weights.get(stage, 0.0)
+    if not total:
+        frac = 0.0
+    else:
+        frac = float(cur) / float(total)
+    pct = int(round((base + stage_weight * frac) * 100))
+    return max(0, min(100, pct))
+
+
+def _format_stage(stage: str, cur: int, total: int) -> str:
+    if not stage:
+        return "**Stage:** idle"
+    if total and total > 1:
+        return f"**Stage:** {stage} ({cur}/{total})"
+    return f"**Stage:** {stage}"
+
+
+def _generate_video_blocking(
     preset_name,
     prompt,
     num_steps,
@@ -137,16 +170,28 @@ def generate_video(
     i2v_adaptive_resolution: bool = True,
     i2v_boundary: float = 0.9,
     i2v_ode: bool = True,
+    progress_cb=None,
+    log_cb=None,
 ):
     logs = []
+
+    def _log(msg):
+        logs.append(msg)
+        if log_cb:
+            log_cb(msg)
+
+    def _progress(stage, cur, total):
+        if progress_cb:
+            progress_cb(stage, cur, total)
+
     try:
         cfg = get_preset(preset_name)
         model_name = str(getattr(cfg, "model", "") or "")
         is_i2v = model_name.startswith("Wan2.2")
 
         if is_i2v and init_image is None:
-            status = "❌ I2V preset selected, but no init image provided."
-            logs.append(status)
+            status = "I2V preset selected. Please upload an init image."
+            _log(status)
             return None, status, "\n".join(logs[-200:]), {}
 
         # ---------- load (auto reload if load-time options changed) ----------
@@ -169,18 +214,6 @@ def generate_video(
         else:
             seed = int(seed)
 
-        # progress/log buffers
-        stage_text = {"text": "starting"}
-        progress = {"cur": 0, "total": 1}
-
-        def log_cb(msg):
-            logs.append(msg)
-
-        def progress_cb(stage, cur, total):
-            stage_text["text"] = stage
-            progress["cur"] = cur
-            progress["total"] = total
-
         # file naming
         ts = time.strftime("%Y%m%d-%H%M%S")
         mode = "i2v" if is_i2v else "t2v"
@@ -202,8 +235,8 @@ def generate_video(
                 sigma_max=float(sigma_max),
                 save_path=str(save_path),
                 fps=int(fps),
-                progress_cb=progress_cb,
-                log_cb=log_cb,
+                progress_cb=_progress,
+                log_cb=_log,
             )
         else:
             out_path = eng.generate(
@@ -218,13 +251,13 @@ def generate_video(
                 default_norm=bool(default_norm),
                 save_path=str(save_path),
                 fps=int(fps),
-                progress_cb=progress_cb,
-                log_cb=log_cb,
+                progress_cb=_progress,
+                log_cb=_log,
             )
         out_path = Path(out_path)
         if out_path.is_dir() or not out_path.exists():
             err = f"❌ invalid output path: {out_path}"
-            logs.append(err)
+            _log(err)
             status = err
             return None, status, "\n".join(logs[-200:]), {}
 
@@ -260,12 +293,136 @@ def generate_video(
         tb = traceback.format_exc()
         if not logs:
             # ensure the textbox is populated even if the engine raises instantly
-            logs.append("❌ No logs were produced before the failure.")
-        logs.append(f"❌ Inference failed: {exc}")
-        logs.append(tb)
+            _log("No logs were produced before the failure.")
+        _log(f"Inference failed: {exc}")
+        _log(tb)
         log_text = "\n".join(logs[-200:])
-        status = f"❌ Error during inference: {exc}"
+        status = f"Error during inference: {exc}"
         return None, status, log_text, {}
+
+
+def generate_video(
+    preset_name,
+    prompt,
+    num_steps,
+    num_frames,
+    num_samples,
+    seed_mode,
+    seed,
+    attention_type,
+    sla_topk,
+    sigma_max,
+    fps,
+    keep_dit_on_gpu,
+    keep_text_encoder,
+    default_norm,
+    init_image=None,
+    i2v_adaptive_resolution: bool = True,
+    i2v_boundary: float = 0.9,
+    i2v_ode: bool = True,
+):
+    logs = []
+    stage_state = {"stage": "starting", "cur": 0, "total": 1}
+    result = {"video": None, "status": "", "log_text": "", "meta": {}}
+    done = threading.Event()
+    lock = threading.Lock()
+
+    def log_cb(msg):
+        with lock:
+            logs.append(msg)
+
+    def progress_cb(stage, cur, total):
+        with lock:
+            stage_state["stage"] = stage
+            stage_state["cur"] = cur
+            stage_state["total"] = total
+
+    def _run():
+        try:
+            video, status, log_text, meta = _generate_video_blocking(
+                preset_name,
+                prompt,
+                num_steps,
+                num_frames,
+                num_samples,
+                seed_mode,
+                seed,
+                attention_type,
+                sla_topk,
+                sigma_max,
+                fps,
+                keep_dit_on_gpu,
+                keep_text_encoder,
+                default_norm,
+                init_image,
+                i2v_adaptive_resolution,
+                i2v_boundary,
+                i2v_ode,
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+            )
+            result["video"] = video
+            result["status"] = status
+            result["log_text"] = log_text
+            result["meta"] = meta
+        except Exception as exc:
+            err = f"Error during inference: {exc}"
+            with lock:
+                logs.append(err)
+            result["video"] = None
+            result["status"] = err
+            result["log_text"] = "\n".join(logs[-200:])
+            result["meta"] = {}
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+
+    last_snapshot = None
+    while not done.is_set():
+        with lock:
+            stage = stage_state["stage"]
+            cur = stage_state["cur"]
+            total = stage_state["total"]
+            log_text = "\n".join(logs[-200:])
+            snapshot = (stage, cur, total, len(logs))
+        progress_pct = _progress_percent(stage, cur, total)
+        stage_md = _format_stage(stage, cur, total)
+        if stage and total and total > 1:
+            status = f"Running: {stage} ({cur}/{total})"
+        elif stage:
+            status = f"Running: {stage}"
+        else:
+            status = "Running..."
+        if snapshot != last_snapshot:
+            yield (
+                gr.update(),  # out_video
+                status,
+                log_text,
+                None,
+                stage_md,
+                progress_pct,
+            )
+            last_snapshot = snapshot
+        time.sleep(0.2)
+
+    final_log_text = result["log_text"] or "\n".join(logs[-200:])
+    meta = result["meta"]
+    if meta:
+        final_stage = "**Stage:** done"
+        final_progress = 100
+    else:
+        final_stage = "**Stage:** error"
+        final_progress = 0
+    yield (
+        result["video"],
+        result["status"],
+        final_log_text,
+        meta,
+        final_stage,
+        final_progress,
+    )
 
 
 def create_demo():
@@ -294,9 +451,13 @@ def create_demo():
                         discover_msg_generate = gr.Markdown(visible=False)
                         prompt = gr.Textbox(lines=3, label="Prompt", value="a cinematic shot of a tiger walking in snow")
                         init_image = gr.Image(
-                            label="Init Image (I2V)",
+                            label="Upload Image (I2V)",
                             type="numpy",
                             sources=["upload"],
+                            visible=default_is_i2v,
+                        )
+                        init_image_hint = gr.Markdown(
+                            "Upload an image to enable I2V.",
                             visible=default_is_i2v,
                         )
 
@@ -412,7 +573,7 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                     ],
-                    outputs=[out_video, status_md, log_box, last_meta_state],
+                    outputs=[out_video, status_md, log_box, last_meta_state, stage_md, prog],
                     concurrency_id="gpu",
                     concurrency_limit=1,
                 )
@@ -420,6 +581,7 @@ def create_demo():
                 def _on_preset_change(name: str):
                     is_i2v = "WAN2.2" in (name or "").upper()
                     img_update = gr.update(visible=True) if is_i2v else gr.update(visible=False, value=None)
+                    hint_update = gr.update(visible=is_i2v)
                     adaptive_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
                     boundary_update = gr.update(visible=is_i2v, value=0.9)
                     ode_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
@@ -428,6 +590,7 @@ def create_demo():
                     return (
                         preset_details(name),
                         img_update,
+                        hint_update,
                         adaptive_update,
                         boundary_update,
                         ode_update,
@@ -441,6 +604,7 @@ def create_demo():
                     outputs=[
                         preset_info,
                         init_image,
+                        init_image_hint,
                         i2v_adaptive_resolution,
                         i2v_boundary,
                         i2v_ode,
