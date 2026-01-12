@@ -368,7 +368,6 @@ def create_demo():
 
                     with gr.Column(scale=5):
                         stage_md = gr.Markdown("**Stage:** idle")
-                        prog = gr.Slider(0, 100, value=0, step=1, label="Progress (%)", interactive=False)
                         status_md = gr.Markdown("")
 
                         out_video = gr.Video(label="Output Video", interactive=False)
