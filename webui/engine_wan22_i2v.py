@@ -43,7 +43,7 @@ class TurboWanI2VEngine:
         aspect_ratio: str = "16:9",
         sigma_max: float = 200.0,
         boundary: float = 0.9,
-        attention_type: str = "sagesla",
+        attention_type: str = "sla",
         sla_topk: float = 0.1,
         quant_linear: bool = False,
         default_norm: bool = False,
