@@ -426,7 +426,19 @@ def generate_video(
 
 
 def create_demo():
-    with gr.Blocks(title="TurboDiffusion WebUI (Wan2.x T2V / I2V)") as demo:
+    with gr.Blocks(
+        title="TurboDiffusion WebUI (Wan2.x T2V / I2V)",
+        css="""
+        .gradio-container .loading {
+          border-color: inherit !important;
+          box-shadow: none !important;
+          outline: none !important;
+        }
+        .gradio-container .loading * {
+          box-shadow: none !important;
+        }
+        """,
+    ) as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
                     "✅ Model switch + SageSLA check  →  ✅ Progress & Logs  →  ✅ History & Download  →  ✅ Load/Unload & GPU stats"
 )
