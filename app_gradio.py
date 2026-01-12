@@ -435,6 +435,13 @@ def create_demo():
           box-shadow: none !important;
           outline: none !important;
         }
+        .gradio-container .block,
+        .gradio-container .block * {
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
+          box-shadow: none !important;
+          outline: none !important;
+        }
         .gradio-container .block:focus-within,
         .gradio-container .block:has(input:focus),
         .gradio-container .block:has(textarea:focus),
