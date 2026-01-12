@@ -23,6 +23,8 @@ OUT.mkdir(parents=True, exist_ok=True)
 MANAGER = EngineManager()
 PRESET_CHOICES = discoverable_preset_names() or list(PRESETS.keys())
 DEFAULT_PRESET = PRESET_CHOICES[0]
+PROGRESS = {"cur": 0, "total": 1, "running": False}
+PROGRESS_LOCK = threading.Lock()
 
 
 def _status_badge(loaded: bool, msg: str = ""):
@@ -118,6 +120,28 @@ def refresh_presets_with_feedback(current_generate_choice, current_models_choice
     )
 
 
+def stream_progress():
+    yield 0
+    start = time.time()
+    started = False
+    while True:
+        with PROGRESS_LOCK:
+            running = PROGRESS["running"]
+            cur = PROGRESS["cur"]
+            total = PROGRESS["total"]
+        if running:
+            started = True
+            total = total or 1
+            pct = int(max(0, min(100, (cur / total) * 100)))
+            yield pct
+            time.sleep(0.1)
+            continue
+        if not started and (time.time() - start) < 2:
+            time.sleep(0.05)
+            continue
+        break
+
+
 def generate_video(
     preset_name,
     prompt,
@@ -145,9 +169,12 @@ def generate_video(
         if is_i2v and init_image is None:
             status = "❌ I2V preset selected, but no init image provided."
             logs.append(status)
-            yield None, status, "\n".join(logs[-200:]), {}, 0
-            return
+            return None, status, "\n".join(logs[-200:]), {}
 
+        with PROGRESS_LOCK:
+            PROGRESS["cur"] = 0
+            PROGRESS["total"] = 1
+            PROGRESS["running"] = True
         # ---------- load (auto reload if load-time options changed) ----------
         MANAGER.load(
             cfg,
@@ -167,87 +194,59 @@ def generate_video(
             seed = int(seed)
 
         # progress/log buffers
-        stage_text = {"text": "starting"}
-        progress = {"cur": 0, "total": 1}
 
         def log_cb(msg):
             logs.append(msg)
 
         def progress_cb(stage, cur, total):
-            stage_text["text"] = stage
-            progress["cur"] = cur
-            progress["total"] = total
+            with PROGRESS_LOCK:
+                PROGRESS["cur"] = cur
+                PROGRESS["total"] = total
 
         # file naming
         ts = time.strftime("%Y%m%d-%H%M%S")
         mode = "i2v" if is_i2v else "t2v"
         save_path = OUT / f"{mode}_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
 
-        # run inference with progress polling
-        result = {"out_path": None, "error": None}
-
-        def _run_generate():
-            try:
-                if is_i2v:
-                    result["out_path"] = eng.generate(
-                        prompt=prompt,
-                        init_image=init_image,
-                        num_steps=int(num_steps),
-                        num_frames=int(num_frames),
-                        seed=int(seed),
-                        num_samples=int(num_samples),
-                        adaptive_resolution=bool(i2v_adaptive_resolution),
-                        boundary=float(i2v_boundary),
-                        ode=bool(i2v_ode),
-                        sigma_max=float(sigma_max),
-                        save_path=str(save_path),
-                        fps=int(fps),
-                        progress_cb=progress_cb,
-                        log_cb=log_cb,
-                    )
-                else:
-                    result["out_path"] = eng.generate(
-                        prompt=prompt,
-                        num_steps=int(num_steps),
-                        num_frames=int(num_frames),
-                        seed=int(seed),
-                        num_samples=int(num_samples),
-                        sigma_max=float(sigma_max),
-                        default_norm=bool(default_norm),
-                        save_path=str(save_path),
-                        fps=int(fps),
-                        progress_cb=progress_cb,
-                        log_cb=log_cb,
-                    )
-            except Exception as exc:
-                result["error"] = exc
-
+        # run inference
         t0 = time.time()
-        worker = threading.Thread(target=_run_generate, daemon=True)
-        worker.start()
-
-        last_pct = None
-        while worker.is_alive():
-            total = progress["total"] or 1
-            cur = progress["cur"]
-            pct = int(max(0, min(100, (cur / total) * 100)))
-            if pct != last_pct:
-                last_pct = pct
-                yield gr.update(), gr.update(), gr.update(), gr.update(), pct
-            time.sleep(0.1)
-
-        worker.join()
-
-        if result["error"] is not None:
-            raise result["error"]
-
-        out_path = Path(result["out_path"])
+        if is_i2v:
+            out_path = eng.generate(
+                prompt=prompt,
+                init_image=init_image,
+                num_steps=int(num_steps),
+                num_frames=int(num_frames),
+                seed=int(seed),
+                num_samples=int(num_samples),
+                adaptive_resolution=bool(i2v_adaptive_resolution),
+                boundary=float(i2v_boundary),
+                ode=bool(i2v_ode),
+                sigma_max=float(sigma_max),
+                save_path=str(save_path),
+                fps=int(fps),
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+            )
+        else:
+            out_path = eng.generate(
+                prompt=prompt,
+                num_steps=int(num_steps),
+                num_frames=int(num_frames),
+                seed=int(seed),
+                num_samples=int(num_samples),
+                sigma_max=float(sigma_max),
+                default_norm=bool(default_norm),
+                save_path=str(save_path),
+                fps=int(fps),
+                progress_cb=progress_cb,
+                log_cb=log_cb,
+            )
+        out_path = Path(out_path)
         if out_path.is_dir() or not out_path.exists():
             err = f"?invalid output path: {out_path}"
             logs.append(err)
             status = err
-            yield None, status, "\n".join(logs[-200:]), {}, 0
-            return
+            return None, status, "\n".join(logs[-200:]), {}
 
         t1 = time.time()
 
@@ -274,7 +273,7 @@ def generate_video(
         status = f"✅ Done in **{meta['sec']}s** | seed={seed} | saved: `{out_path}`"
         log_text = "\n".join(logs[-200:])  # keep last 200 lines
 
-        yield str(out_path), status, log_text, meta, 100
+        return str(out_path), status, log_text, meta
     except Exception as exc:  # capture inference failure
         tb = traceback.format_exc()
         if not logs:
@@ -284,8 +283,12 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        yield None, status, log_text, {}, 0
+        return None, status, log_text, {}
 
+
+    finally:
+        with PROGRESS_LOCK:
+            PROGRESS["running"] = False
 
 def create_demo():
     with gr.Blocks(title="TurboDiffusion WebUI (Wan2.x T2V / I2V)") as demo:
@@ -423,8 +426,15 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                     ],
-                    outputs=[out_video, status_md, log_box, last_meta_state, prog],
+                    outputs=[out_video, status_md, log_box, last_meta_state],
                     concurrency_id="gpu",
+                    concurrency_limit=1,
+                )
+
+                run_btn.click(
+                    fn=stream_progress,
+                    outputs=[prog],
+                    concurrency_id="progress",
                     concurrency_limit=1,
                 )
 
