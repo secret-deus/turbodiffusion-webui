@@ -435,12 +435,30 @@ def create_demo():
           box-shadow: none !important;
           outline: none !important;
         }
+        .gradio-container {
+          --color-accent: #e5e7eb !important;
+          --color-accent-soft: #e5e7eb !important;
+          --color-accent-hover: #e5e7eb !important;
+          --shadow-1: none !important;
+          --shadow-2: none !important;
+          --shadow-3: none !important;
+        }
         .gradio-container .block,
         .gradio-container .block * {
           --tw-ring-color: transparent !important;
           --tw-ring-shadow: none !important;
           box-shadow: none !important;
           outline: none !important;
+        }
+        .gradio-container .highlight,
+        .gradio-container .gradio-highlight,
+        .gradio-container .block.highlight,
+        .gradio-container [class*="highlight"] {
+          border-color: var(--neutral-200, #e5e7eb) !important;
+          box-shadow: none !important;
+          outline: none !important;
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
         }
         .gradio-container .block:focus-within,
         .gradio-container .block:has(input:focus),
