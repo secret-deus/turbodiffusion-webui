@@ -310,8 +310,8 @@ def create_demo():
                         with gr.Accordion("Quality & Speed", open=True):
                             # SageSLA may be disabled if SpargeAttn missing
                             attention_type = gr.Dropdown(
-                                ["sla", "sagesla", "original"],
-                                value=("sagesla" if default_is_i2v else "sla"),
+                                ["sla", "original"],
+                                value=("sla"),
                                 label="Attention Type",
                             )
                             sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k (sla/sagesla)")
