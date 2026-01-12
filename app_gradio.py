@@ -1,7 +1,6 @@
 import os
 import time
 import traceback
-import threading
 from pathlib import Path
 import gradio as gr
 
@@ -23,8 +22,6 @@ OUT.mkdir(parents=True, exist_ok=True)
 MANAGER = EngineManager()
 PRESET_CHOICES = discoverable_preset_names() or list(PRESETS.keys())
 DEFAULT_PRESET = PRESET_CHOICES[0]
-PROGRESS = {"cur": 0, "total": 1, "running": False}
-PROGRESS_LOCK = threading.Lock()
 
 
 def _status_badge(loaded: bool, msg: str = ""):
@@ -120,28 +117,6 @@ def refresh_presets_with_feedback(current_generate_choice, current_models_choice
     )
 
 
-def stream_progress():
-    yield 0
-    start = time.time()
-    started = False
-    while True:
-        with PROGRESS_LOCK:
-            running = PROGRESS["running"]
-            cur = PROGRESS["cur"]
-            total = PROGRESS["total"]
-        if running:
-            started = True
-            total = total or 1
-            pct = int(max(0, min(100, (cur / total) * 100)))
-            yield pct
-            time.sleep(0.1)
-            continue
-        if not started and (time.time() - start) < 2:
-            time.sleep(0.05)
-            continue
-        break
-
-
 def generate_video(
     preset_name,
     prompt,
@@ -171,10 +146,6 @@ def generate_video(
             logs.append(status)
             return None, status, "\n".join(logs[-200:]), {}
 
-        with PROGRESS_LOCK:
-            PROGRESS["cur"] = 0
-            PROGRESS["total"] = 1
-            PROGRESS["running"] = True
         # ---------- load (auto reload if load-time options changed) ----------
         MANAGER.load(
             cfg,
@@ -193,15 +164,8 @@ def generate_video(
         else:
             seed = int(seed)
 
-        # progress/log buffers
-
         def log_cb(msg):
             logs.append(msg)
-
-        def progress_cb(stage, cur, total):
-            with PROGRESS_LOCK:
-                PROGRESS["cur"] = cur
-                PROGRESS["total"] = total
 
         # file naming
         ts = time.strftime("%Y%m%d-%H%M%S")
@@ -224,7 +188,6 @@ def generate_video(
                 sigma_max=float(sigma_max),
                 save_path=str(save_path),
                 fps=int(fps),
-                progress_cb=progress_cb,
                 log_cb=log_cb,
             )
         else:
@@ -238,7 +201,6 @@ def generate_video(
                 default_norm=bool(default_norm),
                 save_path=str(save_path),
                 fps=int(fps),
-                progress_cb=progress_cb,
                 log_cb=log_cb,
             )
         out_path = Path(out_path)
@@ -285,10 +247,6 @@ def generate_video(
         status = f"❌ Error during inference: {exc}"
         return None, status, log_text, {}
 
-
-    finally:
-        with PROGRESS_LOCK:
-            PROGRESS["running"] = False
 
 def create_demo():
     with gr.Blocks(title="TurboDiffusion WebUI (Wan2.x T2V / I2V)") as demo:
@@ -392,20 +350,17 @@ def create_demo():
                     return history, rows
 
                 def _after_gen(video_path, status, logs, meta, history):
-                    # update progress and stage
                     if meta:
                         stage = "**Stage:** done"
-                        progress_pct = 100
                         history, rows = _update_history(meta, history)
                     else:
                         stage = "**Stage:** error"
-                        progress_pct = 0
                         rows = [[
                             x["time"], x["preset"], x["seed"], x["steps"], x["frames"],
                             x["sec"], x["path"]
                         ] for x in history]
                     return (
-                        stage, progress_pct,
+                        stage,
                         status, logs,
                         history, rows
                     )
@@ -428,14 +383,6 @@ def create_demo():
                     outputs=[out_video, status_md, log_box, last_meta_state],
                     concurrency_id="gpu",
                     concurrency_limit=1,
-                )
-
-                run_btn.click(
-                    fn=stream_progress,
-                    outputs=[prog],
-                    concurrency_id="progress",
-                    concurrency_limit=1,
-                    queue=False,
                 )
 
                 def _on_preset_change(name: str):
@@ -470,7 +417,7 @@ def create_demo():
                 run_evt.then(
                     fn=_after_gen,
                     inputs=[out_video, status_md, log_box, last_meta_state, history_state],
-                    outputs=[stage_md, prog, status_md, log_box, history_state, history_df],
+                    outputs=[stage_md, status_md, log_box, history_state, history_df],
                 )
 
             # ===================== Models Tab =====================
