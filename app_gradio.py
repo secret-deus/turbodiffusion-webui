@@ -151,6 +151,18 @@ def _format_stage(stage: str, cur: int, total: int) -> str:
     return f"**Stage:** {stage}"
 
 
+def _timer_html(elapsed: float, finished: bool = False) -> str:
+    label = "Took" if finished else "Elapsed"
+    state = "done" if finished else "running"
+    return (
+        f'<div class="timer {state}">'
+        f'<span class="dot"></span>'
+        f'<span class="label">{label}</span>'
+        f'<span class="time">{elapsed:.1f}s</span>'
+        "</div>"
+    )
+
+
 def _generate_video_blocking(
     preset_name,
     prompt,
