@@ -1,6 +1,7 @@
 import os
 import time
 import traceback
+import threading
 from pathlib import Path
 import gradio as gr
 
@@ -13,7 +14,7 @@ from webui.schemas import (
     refresh_discovered_presets,
 )
 from webui.manager import EngineManager
-from webui.utils import gpu_info, has_spargeattn, check_paths
+from webui.utils import gpu_info, check_paths
 
 _output_dir = os.environ.get("OUTPUT_DIR")
 OUT = Path(_output_dir) if _output_dir else (Path.cwd() / "outputs")
@@ -59,8 +60,7 @@ def unload_model():
 
 def refresh_system():
     info = gpu_info()
-    sa = has_spargeattn()
-    return info, ("✅ SpargeAttn installed (sagesla available)" if sa else "❌ SpargeAttn not installed (sagesla disabled)")
+    return info
 
 
 def validate_paths(preset_name):
@@ -126,8 +126,6 @@ def generate_video(
     num_samples,
     seed_mode,
     seed,
-    attention_type,
-    sla_topk,
     sigma_max,
     fps,
     keep_dit_on_gpu,
@@ -147,13 +145,12 @@ def generate_video(
         if is_i2v and init_image is None:
             status = "❌ I2V preset selected, but no init image provided."
             logs.append(status)
-            return None, status, "\n".join(logs[-200:]), {}
+            yield None, status, "\n".join(logs[-200:]), {}, 0
+            return
 
         # ---------- load (auto reload if load-time options changed) ----------
         MANAGER.load(
             cfg,
-            attention_type=attention_type,
-            sla_topk=float(sla_topk),
             default_norm=bool(default_norm),
         )
 
@@ -186,47 +183,71 @@ def generate_video(
         mode = "i2v" if is_i2v else "t2v"
         save_path = OUT / f"{mode}_{preset_name.replace(' ','_')}_{ts}_seed{seed}.mp4"
 
-        # run inference
+        # run inference with progress polling
+        result = {"out_path": None, "error": None}
+
+        def _run_generate():
+            try:
+                if is_i2v:
+                    result["out_path"] = eng.generate(
+                        prompt=prompt,
+                        init_image=init_image,
+                        num_steps=int(num_steps),
+                        num_frames=int(num_frames),
+                        seed=int(seed),
+                        num_samples=int(num_samples),
+                        adaptive_resolution=bool(i2v_adaptive_resolution),
+                        boundary=float(i2v_boundary),
+                        ode=bool(i2v_ode),
+                        sigma_max=float(sigma_max),
+                        save_path=str(save_path),
+                        fps=int(fps),
+                        progress_cb=progress_cb,
+                        log_cb=log_cb,
+                    )
+                else:
+                    result["out_path"] = eng.generate(
+                        prompt=prompt,
+                        num_steps=int(num_steps),
+                        num_frames=int(num_frames),
+                        seed=int(seed),
+                        num_samples=int(num_samples),
+                        sigma_max=float(sigma_max),
+                        default_norm=bool(default_norm),
+                        save_path=str(save_path),
+                        fps=int(fps),
+                        progress_cb=progress_cb,
+                        log_cb=log_cb,
+                    )
+            except Exception as exc:
+                result["error"] = exc
+
         t0 = time.time()
-        if is_i2v:
-            out_path = eng.generate(
-                prompt=prompt,
-                init_image=init_image,
-                num_steps=int(num_steps),
-                num_frames=int(num_frames),
-                seed=int(seed),
-                num_samples=int(num_samples),
-                adaptive_resolution=bool(i2v_adaptive_resolution),
-                boundary=float(i2v_boundary),
-                ode=bool(i2v_ode),
-                sigma_max=float(sigma_max),
-                save_path=str(save_path),
-                fps=int(fps),
-                progress_cb=progress_cb,
-                log_cb=log_cb,
-            )
-        else:
-            out_path = eng.generate(
-                prompt=prompt,
-                num_steps=int(num_steps),
-                num_frames=int(num_frames),
-                seed=int(seed),
-                num_samples=int(num_samples),
-                attention_type=attention_type,
-                sla_topk=float(sla_topk),
-                sigma_max=float(sigma_max),
-                default_norm=bool(default_norm),
-                save_path=str(save_path),
-                fps=int(fps),
-                progress_cb=progress_cb,
-                log_cb=log_cb,
-            )
-        out_path = Path(out_path)
+        worker = threading.Thread(target=_run_generate, daemon=True)
+        worker.start()
+
+        last_pct = None
+        while worker.is_alive():
+            total = progress["total"] or 1
+            cur = progress["cur"]
+            pct = int(max(0, min(100, (cur / total) * 100)))
+            if pct != last_pct:
+                last_pct = pct
+                yield gr.update(), gr.update(), gr.update(), gr.update(), pct
+            time.sleep(0.1)
+
+        worker.join()
+
+        if result["error"] is not None:
+            raise result["error"]
+
+        out_path = Path(result["out_path"])
         if out_path.is_dir() or not out_path.exists():
-            err = f"❌ invalid output path: {out_path}"
+            err = f"?invalid output path: {out_path}"
             logs.append(err)
             status = err
-            return None, status, "\n".join(logs[-200:]), {}
+            yield None, status, "\n".join(logs[-200:]), {}, 0
+            return
 
         t1 = time.time()
 
@@ -238,8 +259,6 @@ def generate_video(
             "seed": seed,
             "steps": int(num_steps),
             "frames": int(num_frames),
-            "attn": attention_type,
-            "topk": float(sla_topk),
             "path": str(out_path),
             "sec": round(t1 - t0, 2),
         }
@@ -255,7 +274,7 @@ def generate_video(
         status = f"✅ Done in **{meta['sec']}s** | seed={seed} | saved: `{out_path}`"
         log_text = "\n".join(logs[-200:])  # keep last 200 lines
 
-        return str(out_path), status, log_text, meta
+        yield str(out_path), status, log_text, meta, 100
     except Exception as exc:  # capture inference failure
         tb = traceback.format_exc()
         if not logs:
@@ -265,13 +284,13 @@ def generate_video(
         logs.append(tb)
         log_text = "\n".join(logs[-200:])
         status = f"❌ Error during inference: {exc}"
-        return None, status, log_text, {}
+        yield None, status, log_text, {}, 0
 
 
 def create_demo():
     with gr.Blocks(title="TurboDiffusion WebUI (Wan2.x T2V / I2V)") as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
-                    "✅ Model switch + SageSLA check  →  ✅ Progress & Logs  →  ✅ History & Download  →  ✅ Load/Unload & GPU stats"
+                    "✅ Model switch  →  ✅ Progress & Logs  →  ✅ History & Download  →  ✅ Load/Unload & GPU stats"
 )
 
         # global states
@@ -292,6 +311,7 @@ def create_demo():
                         preset_info = gr.Markdown(preset_details(DEFAULT_PRESET))
                         discover_btn_generate = gr.Button("🔄 Discover models", variant="secondary")
                         discover_msg_generate = gr.Markdown(visible=False)
+                        run_btn = gr.Button("Generate", variant="primary")
                         prompt = gr.Textbox(lines=3, label="Prompt", value="a cinematic shot of a tiger walking in snow")
                         init_image = gr.Image(
                             label="Init Image (I2V)",
@@ -309,13 +329,6 @@ def create_demo():
                             seed = gr.Number(value=0, precision=0, label="Seed (fixed mode)")
 
                         with gr.Accordion("Quality & Speed", open=True):
-                            # SageSLA may be disabled if SpargeAttn missing
-                            attention_type = gr.Dropdown(
-                                ["sla", "original"],
-                                value=("sla"),
-                                label="Attention Type",
-                            )
-                            sla_topk = gr.Slider(0.05, 0.20, value=0.10, step=0.01, label="SLA top-k (sla/sagesla)")
                             sigma_max = gr.Slider(
                                 10,
                                 200,
@@ -350,8 +363,6 @@ def create_demo():
                             keep_dit_on_gpu = gr.Checkbox(value=True, label="Keep DiT on GPU (recommended)")
                             keep_text_encoder = gr.Checkbox(value=False, label="Keep UMT5 encoder (if you modify umt5 cache)")
 
-                        run_btn = gr.Button("Generate", variant="primary")
-
                     with gr.Column(scale=5):
                         stage_md = gr.Markdown("**Stage:** idle")
                         prog = gr.Slider(0, 100, value=0, step=1, label="Progress (%)", interactive=False)
@@ -362,11 +373,11 @@ def create_demo():
                         log_box = gr.Textbox(label="Logs", lines=18, interactive=False)
                         gr.Markdown("### History")
                         history_df = gr.Dataframe(
-                            headers=["time","preset","seed","steps","frames","attn","topk","sec","path"],
-                            datatype=["str","str","number","number","number","str","number","number","str"],
+                            headers=["time","preset","seed","steps","frames","sec","path"],
+                            datatype=["str","str","number","number","number","number","str"],
                             interactive=False,
                             row_count=10,
-                            col_count=(9, "fixed"),
+                            col_count=(7, "fixed"),
                         )
 
                 def _update_history(meta, history):
@@ -374,7 +385,7 @@ def create_demo():
                     history = history[:20]
                     rows = [[
                         x["time"], x["preset"], x["seed"], x["steps"], x["frames"],
-                        x["attn"], x["topk"], x["sec"], x["path"]
+                        x["sec"], x["path"]
                     ] for x in history]
                     return history, rows
 
@@ -389,7 +400,7 @@ def create_demo():
                         progress_pct = 0
                         rows = [[
                             x["time"], x["preset"], x["seed"], x["steps"], x["frames"],
-                            x["attn"], x["topk"], x["sec"], x["path"]
+                            x["sec"], x["path"]
                         ] for x in history]
                     return (
                         stage, progress_pct,
@@ -403,7 +414,7 @@ def create_demo():
                     inputs=[
                         preset, prompt, num_steps, num_frames, num_samples,
                         seed_mode, seed,
-                        attention_type, sla_topk, sigma_max,
+                        sigma_max,
                         fps,
                         keep_dit_on_gpu, keep_text_encoder,
                         default_norm,
@@ -412,7 +423,7 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                     ],
-                    outputs=[out_video, status_md, log_box, last_meta_state],
+                    outputs=[out_video, status_md, log_box, last_meta_state, prog],
                     concurrency_id="gpu",
                     concurrency_limit=1,
                 )
@@ -424,7 +435,6 @@ def create_demo():
                     boundary_update = gr.update(visible=is_i2v, value=0.9)
                     ode_update = gr.update(visible=is_i2v, value=True if is_i2v else False)
                     sigma_update = gr.update(value=200 if is_i2v else 80)
-                    attn_update = gr.update(value="sagesla" if is_i2v else "sla")
                     return (
                         preset_details(name),
                         img_update,
@@ -432,7 +442,6 @@ def create_demo():
                         boundary_update,
                         ode_update,
                         sigma_update,
-                        attn_update,
                     )
 
                 preset.change(
@@ -445,7 +454,6 @@ def create_demo():
                         i2v_boundary,
                         i2v_ode,
                         sigma_max,
-                        attention_type,
                     ],
                 )
 
@@ -471,14 +479,13 @@ def create_demo():
 
                     with gr.Column(scale=4):
                         status_badge = gr.Markdown(_status_badge(False))
-                        sa_text = gr.Markdown("")
                         gpu_json = gr.JSON(label="GPU Info")
 
                         refresh_btn = gr.Button("Refresh System Info")
 
                 validate_btn.click(validate_paths, inputs=[preset_m], outputs=[validate_out])
                 preset_m.change(lambda name: preset_details(name), inputs=[preset_m], outputs=[preset_info_m])
-                refresh_btn.click(refresh_system, outputs=[gpu_json, sa_text])
+                refresh_btn.click(refresh_system, outputs=[gpu_json])
 
                 load_btn.click(load_model, inputs=[preset_m], outputs=[status_badge, load_btn, unload_btn], concurrency_id="gpu", concurrency_limit=1)
                 unload_btn.click(unload_model, outputs=[status_badge, load_btn, unload_btn], concurrency_id="gpu", concurrency_limit=1)
@@ -494,12 +501,11 @@ def create_demo():
                     outputs=[preset, preset_m, discover_msg_generate, discover_btn_generate],
                 )
             # ===================== System Tab =====================
-            with gr.Tab("System"):
-                gr.Markdown("### Environment & Diagnostics")
-                gpu_json2 = gr.JSON(label="GPU Info")
-                sa_text2 = gr.Markdown("")
-                refresh_btn2 = gr.Button("Refresh")
-                refresh_btn2.click(refresh_system, outputs=[gpu_json2, sa_text2])
+                with gr.Tab("System"):
+                    gr.Markdown("### Environment & Diagnostics")
+                    gpu_json2 = gr.JSON(label="GPU Info")
+                    refresh_btn2 = gr.Button("Refresh")
+                    refresh_btn2.click(refresh_system, outputs=[gpu_json2])
 
     # Global queue: safest for GPU workloads
     demo.queue(default_concurrency_limit=1)  # 1 by default anyway, but explicit
