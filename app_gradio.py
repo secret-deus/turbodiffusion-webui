@@ -466,6 +466,16 @@ def create_demo():
           box-shadow: none !important;
           outline: none !important;
         }
+        .gradio-container .block.output,
+        .gradio-container .block.output .wrap,
+        .gradio-container .block.output textarea,
+        .gradio-container .block.output input {
+          border-color: var(--neutral-200, #e5e7eb) !important;
+          box-shadow: none !important;
+          outline: none !important;
+          --tw-ring-color: transparent !important;
+          --tw-ring-shadow: none !important;
+        }
         """,
     ) as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
