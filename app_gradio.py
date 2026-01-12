@@ -455,6 +455,17 @@ def create_demo():
           --tw-ring-shadow: none !important;
           box-shadow: none !important;
         }
+        .gradio-container .gradio-slider,
+        .gradio-container .gradio-slider .wrap,
+        .gradio-container .gradio-slider input[type="range"],
+        .gradio-container .gradio-textbox,
+        .gradio-container .gradio-textbox .wrap,
+        .gradio-container .gradio-textbox textarea,
+        .gradio-container .gradio-textbox input {
+          border-color: var(--neutral-200, #e5e7eb) !important;
+          box-shadow: none !important;
+          outline: none !important;
+        }
         """,
     ) as demo:
         gr.Markdown("# TurboDiffusion WebUI (Engine Mode)\n"
