@@ -436,6 +436,7 @@ def create_demo():
                     outputs=[prog],
                     concurrency_id="progress",
                     concurrency_limit=1,
+                    queue=False,
                 )
 
                 def _on_preset_change(name: str):
