@@ -129,7 +129,6 @@ def generate_video(
     fps,
     keep_dit_on_gpu,
     keep_text_encoder,
-    default_norm,
     init_image=None,
     i2v_adaptive_resolution: bool = True,
     i2v_boundary: float = 0.9,
@@ -149,7 +148,7 @@ def generate_video(
         # ---------- load (auto reload if load-time options changed) ----------
         MANAGER.load(
             cfg,
-            default_norm=bool(default_norm),
+            default_norm=False,
         )
 
         eng = MANAGER.engine
@@ -198,7 +197,6 @@ def generate_video(
                 seed=int(seed),
                 num_samples=int(num_samples),
                 sigma_max=float(sigma_max),
-                default_norm=bool(default_norm),
                 save_path=str(save_path),
                 fps=int(fps),
                 log_cb=log_cb,
@@ -297,7 +295,6 @@ def create_demo():
                                 step=1,
                                 label="sigma_max",
                             )
-                            default_norm = gr.Checkbox(value=False, label="default_norm (faster norm)")
                             i2v_adaptive_resolution = gr.Checkbox(
                                 value=True,
                                 label="I2V adaptive resolution (match init image aspect)",
@@ -374,7 +371,6 @@ def create_demo():
                         sigma_max,
                         fps,
                         keep_dit_on_gpu, keep_text_encoder,
-                        default_norm,
                         init_image,
                         i2v_adaptive_resolution,
                         i2v_boundary,
