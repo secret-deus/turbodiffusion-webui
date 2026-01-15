@@ -318,7 +318,7 @@ def create_demo():
                             fps = gr.Slider(8, 30, value=16, step=1, label="FPS")
 
                         with gr.Accordion("Advanced", open=False):
-                            keep_dit_on_gpu = gr.Checkbox(value=True, label="Keep DiT on GPU (recommended)")
+                            keep_dit_on_gpu = gr.Checkbox(value=False, label="Keep DiT on GPU (recommended)")
                             keep_text_encoder = gr.Checkbox(value=False, label="Keep UMT5 encoder (if you modify umt5 cache)")
 
                     with gr.Column(scale=5):
