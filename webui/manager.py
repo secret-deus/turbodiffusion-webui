@@ -88,7 +88,7 @@ class EngineManager:
                 default_norm=load_opts["default_norm"],
                 attention_type=load_opts["attention_type"],
                 sla_topk=load_opts["sla_topk"],
-                keep_dit_on_gpu=True,
+                keep_dit_on_gpu=False,
             )
         self.cfg = cfg
         self.load_opts = load_opts

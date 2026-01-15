@@ -47,7 +47,7 @@ class TurboWanT2VEngine:
         sla_topk: float = 0.1,
         quant_linear: bool = False,
         default_norm: bool = False,
-        keep_dit_on_gpu: bool = True,
+        keep_dit_on_gpu: bool = False,
         keep_text_encoder: bool = False,
     ):
         # config
